@@ -1,11 +1,5 @@
 # ITP Practice Lab
 
-## Pengembangan MVP
-
-- [Dashboard dan eksperimen A/B](docs/MVP-PANDUAN.md)
-- [Bank soal, multi-ujian, paket instruktur, dan analitik](docs/FITUR-1-4-PANDUAN.md)
-- Contoh impor soal: `examples/questions-import.json`.
-
 A Next.js full-stack learning app for independent practice in the **TOEFL ITP Level 1 format**. Interface copy is in Indonesian; all 140 questions and explanations are original English practice content. This is an independent study tool, not an ETS test or certificate.
 
 ## Run locally
@@ -36,6 +30,10 @@ The app intentionally does **not** calculate an official 310–677 TOEFL ITP sco
 
 ## Deployment
 
+Copy [.env.example](.env.example) to `.env.local` and set `APP_ORIGIN` to the origin users open in their browser. Production bank writes and audit exports require this value. Use HTTPS for public deployment. For a local production build, set `APP_ORIGIN=http://localhost:3000` when opening that exact address.
+
+For public deployments behind a trusted reverse proxy, set `AUTH_CLIENT_IP_HEADER` to the header that the proxy overwrites with a single client IP, for example `X-Real-IP`. Keep the Node server private to the proxy so browsers cannot supply this header directly. With the header configured, registration and login are throttled by client IP. Without it, the local setup uses a shared request budget and does not lock an account by username.
+
 Run on a persistent **Node.js server** with a writable `DATA_DIR`. Do not deploy with an ephemeral filesystem (for example, a default serverless filesystem) because accounts and answers would be lost. For public deployment, use a managed database, backups, email verification/password recovery, authentication rate limits, and a reviewed question/audio catalog. The code is a runnable starting project for local use, not a production security assessment.
 
 ## Main files
@@ -47,24 +45,10 @@ Run on a persistent **Node.js server** with a writable `DATA_DIR`. Do not deploy
 - `src/app/api`: HTTP endpoints.
 - `src/components`: interactive dashboard, exam, and review.
 
-## UI/UX upgrade
+## Kelola kelas dan materi
 
-Panduan pemasangan dan pemeriksaan: [docs/UI-UX-PANDUAN.md](docs/UI-UX-PANDUAN.md).
-
-Penyempurnaan font dan tampilan: [docs/TIPOGRAFI-PANDUAN.md](docs/TIPOGRAFI-PANDUAN.md).
-
-Perapian komponen lipat: [docs/ACCORDION-PANDUAN.md](docs/ACCORDION-PANDUAN.md).
-
-Tampilan Bank Soal dan impor file: [docs/BANK-SOAL-UI-PANDUAN.md](docs/BANK-SOAL-UI-PANDUAN.md).
-
-Rincian jumlah soal per ujian/bagian: [docs/BANK-METRIK-PANDUAN.md](docs/BANK-METRIK-PANDUAN.md).
-
-Pengamanan impor JSON dan konfigurasi APP_ORIGIN: [docs/IMPORT-SECURITY-PANDUAN.md](docs/IMPORT-SECURITY-PANDUAN.md).
-
-Ekspor bank soal khusus admin untuk audit: [docs/BANK-EKSPOR-PANDUAN.md](docs/BANK-EKSPOR-PANDUAN.md).
-
-Pemisahan daftar Draf, Review, dan Terbit: [docs/BANK-STATUS-PANDUAN.md](docs/BANK-STATUS-PANDUAN.md).
-
-Mengubah akses paket Privat/Publik dan installer yang mengenali paket publik: [docs/PAKET-AKSES-PANDUAN.md](docs/PAKET-AKSES-PANDUAN.md).
-
-Judul, paragraf, dan catatan sumber Reading: [docs/READING-PANDUAN.md](docs/READING-PANDUAN.md).
+1. Daftar akun lokal, lalu jalankan `npm run admin:grant -- USERNAME admin` dari folder proyek dengan `DATA_DIR` yang sama seperti server. Jika server memuat `DATA_DIR` dari `.env.local`, ekspor nilai yang sama di terminal sebelum menjalankan perintah.
+2. Buka Bank Soal untuk membuat soal atau mengimpor [contoh JSON](examples/questions-import.json). Naskah wajib untuk soal audio. Ajukan draf ke Review, lalu terbitkan dengan catatan pemeriksaan sebagai admin.
+3. Buka Paket & Penugasan untuk menyusun paket dari revisi terbit. Admin dapat membuka akses publik untuk paket yang memenuhi syarat. Instruktur dapat membagikan paket terbit ke kelas yang dimilikinya.
+4. Peserta bergabung dengan kode kelas di dashboard. Tenggat membatasi waktu mulai pertama. Buka katalog untuk melihat tugas dan riwayat. Instruktur dapat melihat hasil kelasnya dan mengekspor CSV dari halaman Analitik.
+5. Admin dapat mengekspor revisi terbaru per soal untuk audit dari Bank Soal dan mengelola eksperimen prompt latihan dari halaman Eksperimen.

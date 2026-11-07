@@ -35,17 +35,18 @@ export function createAssignment(user: User, input: Record<string,unknown>) {
   return id;
 }
 export function assignmentForStudent(userId: string, assignmentId: string) {
-  const task = db().prepare(`SELECT a.* FROM assignments a JOIN enrollments e ON e.classroom_id=a.classroom_id
-    WHERE a.id=? AND e.user_id=?`).get(assignmentId,userId) as {id:string;section:Section;due_at:number|null}|undefined;
+  const task = db().prepare(`SELECT a.*, t.id AS attempt_id FROM assignments a JOIN enrollments e ON e.classroom_id=a.classroom_id
+    LEFT JOIN attempts t ON t.assignment_id=a.id AND t.user_id=e.user_id
+    WHERE a.id=? AND e.user_id=?`).get(assignmentId,userId) as {id:string;section:Section;due_at:number|null;attempt_id:string|null}|undefined;
   if (!task) throw new HttpError("Tugas tidak ditemukan.",404);
-  if (task.due_at !== null && task.due_at < Date.now()) throw new HttpError("Tenggat tugas sudah lewat.",409);
+  if (!task.attempt_id && task.due_at !== null && task.due_at < Date.now()) throw new HttpError("Tenggat tugas sudah lewat.",409);
   return task;
 }
 export function studentAssignments(userId: string) {
   return db().prepare(`SELECT a.*, c.name AS classroom_name, t.id AS attempt_id, t.status AS attempt_status FROM assignments a
     JOIN classrooms c ON c.id=a.classroom_id JOIN enrollments e ON e.classroom_id=a.classroom_id
     LEFT JOIN attempts t ON t.assignment_id=a.id AND t.user_id=e.user_id
-    WHERE e.user_id=? ORDER BY a.created_at DESC`).all(userId) as {id:string;title:string;section:Section;due_at:number|null;classroom_name:string;attempt_id:string|null;attempt_status:string|null}[];
+    WHERE e.user_id=? ORDER BY a.created_at DESC`).all(userId) as {id:string;title:string;section:Section;due_at:number|null;classroom_name:string;attempt_id:string|null;attempt_status:string|null;created_at:number}[];
 }
 export function instructorClasses(user: User) {
   assertRole(user,"instructor");

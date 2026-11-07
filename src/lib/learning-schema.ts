@@ -38,7 +38,8 @@ export function migrateLearning(c: DatabaseSync) {
       task_id TEXT REFERENCES assessment_tasks(id), status TEXT NOT NULL CHECK(status IN ('active','finished')),
       snapshot_json TEXT NOT NULL, answers_json TEXT NOT NULL DEFAULT '{}', timing_json TEXT NOT NULL DEFAULT '{}',
       section_index INTEGER NOT NULL DEFAULT 0, deadline INTEGER, started_at INTEGER NOT NULL, finished_at INTEGER,
-      timing_question_id TEXT, last_tick_at INTEGER
+      timing_question_id TEXT, last_tick_at INTEGER, option_seed TEXT,
+      listening_index INTEGER NOT NULL DEFAULT 0, listening_audio_until INTEGER
     );
     CREATE UNIQUE INDEX IF NOT EXISTS one_assessment_task_attempt ON assessment_attempts(user_id,task_id) WHERE task_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS assessment_responses (
@@ -51,4 +52,14 @@ export function migrateLearning(c: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS assessment_user ON assessment_attempts(user_id,started_at);
     CREATE INDEX IF NOT EXISTS assessment_task ON assessment_attempts(task_id,status);
   `);
+  const columns = c.prepare("PRAGMA table_info(assessment_attempts)").all();
+  if (!columns.some(column => column.name === "option_seed")) {
+    c.exec("ALTER TABLE assessment_attempts ADD COLUMN option_seed TEXT");
+  }
+  if (!columns.some(column => column.name === "listening_index")) {
+    c.exec("ALTER TABLE assessment_attempts ADD COLUMN listening_index INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some(column => column.name === "listening_audio_until")) {
+    c.exec("ALTER TABLE assessment_attempts ADD COLUMN listening_audio_until INTEGER");
+  }
 }

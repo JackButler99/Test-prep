@@ -21,6 +21,7 @@ export function DashboardActions({ logout = false }: { logout?: boolean }) {
     try {
       const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "logout" }) });
       if (!response.ok) throw new Error("Gagal keluar.");
+      router.replace("/login");
       router.refresh();
     } catch { setBusy(""); }
   }

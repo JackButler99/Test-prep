@@ -9,6 +9,7 @@ export function migratePlatform(connection: DatabaseSync) {
   if (!columns.some(c => c.name === "role")) connection.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'student'");
   const attempts = connection.prepare("PRAGMA table_info(attempts)").all() as { name: string }[];
   if (!attempts.some(c => c.name === "assignment_id")) connection.exec("ALTER TABLE attempts ADD COLUMN assignment_id TEXT REFERENCES assignments(id)");
+  if (!attempts.some(c => c.name === "option_seed")) connection.exec("ALTER TABLE attempts ADD COLUMN option_seed TEXT");
   connection.exec(`
     CREATE TABLE IF NOT EXISTS instructor_requests (
       user_id TEXT PRIMARY KEY REFERENCES users(id), organization TEXT NOT NULL,

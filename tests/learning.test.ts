@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { db } from "../src/lib/db";
 import { register,type User } from "../src/lib/auth";
 import { ensureLearningSeed,examProfiles,listBank,saveQuestion,importQuestions,transitionQuestions,createPackage,transitionPackage,saveExamProfile,listPackages } from "../src/lib/learning-bank";
-import { startAssessment,loadAssessment,publicAssessment,mutateAssessment,createAssessmentTask,studentTasks } from "../src/lib/assessments";
+import { startAssessment,loadAssessment,publicAssessment,mutateAssessment,createAssessmentTask,studentClassTasks } from "../src/lib/assessments";
 import { analytics,resultsCsv,csvCell } from "../src/lib/learning-analytics";
 import { createClassroom,joinClassroom } from "../src/lib/classrooms";
 import { createAttempt,loadAttempt,serializeAttempt } from "../src/lib/attempts";
@@ -36,7 +36,7 @@ test("bank validation and workflow enforce permissions and reviewer note",()=>{
   transitionQuestions(teacher,[id],"review","");assert.throws(()=>transitionQuestions(teacher,[id],"publish","Reviewed thoroughly"));
   assert.throws(()=>transitionQuestions(admin,[id],"publish",""));
   transitionQuestions(admin,[id],"publish","The answer and explanation have been checked.");
-  assert.equal(listBank(teacher,true).find(q=>q.id===id)?.state,"published");
+  assert.equal(listBank(teacher,"published").find(q=>q.id===id)?.state,"published");
 });
 test("JSON import is atomic, bounded, and always draft",()=>{
   const before=listBank(admin).length;
@@ -49,10 +49,56 @@ test("new revisions preserve published source and detect stale edits",()=>{
   const id=publish(admin),source=listBank(admin).find(q=>q.id===id)!;
   const revised=saveQuestion(admin,{...question,questionId:source.questionId,expectedRevision:1,prompt:"Versi baru",answer:1});
   assert.equal(listBank(admin).find(q=>q.id===revised)?.revision,2);
-  assert.equal(listBank(admin,true).find(q=>q.questionId===source.questionId)?.id,id);
+  assert.equal(listBank(admin,"published").find(q=>q.questionId===source.questionId)?.id,id);
   assert.throws(()=>saveQuestion(admin,{...question,questionId:source.questionId,expectedRevision:1}));
   assert.throws(()=>saveQuestion(other,{...question,questionId:source.questionId,expectedRevision:2}));
 });
+test("admins can delete standalone drafts and remove draft revisions without reusing their numbers", () => {
+  const standaloneId = saveQuestion(teacher, question);
+  const standalone = listBank(admin).find(q => q.id === standaloneId)!;
+  assert.throws(() => transitionQuestions(teacher, [standaloneId], "deleteDraft", ""), { status: 403 });
+  transitionQuestions(admin, [standaloneId], "deleteDraft", "");
+  assert.equal(db().prepare("SELECT id FROM bank_questions WHERE id=?").get(standalone.questionId), undefined);
+  assert.equal(db().prepare("SELECT id FROM question_revisions WHERE id=?").get(standaloneId), undefined);
+  assert.ok(db().prepare("SELECT id FROM audit_log WHERE action='question.draft.deleted' AND target_id=?").get(standaloneId));
+
+  const publishedId = publish(admin);
+  const original = listBank(admin).find(q => q.id === publishedId)!;
+  const draftId = saveQuestion(admin, { ...question, questionId: original.questionId, expectedRevision: 1 });
+  transitionQuestions(admin, [draftId], "deleteDraft", "");
+  assert.equal(listBank(admin).find(q => q.questionId === original.questionId)?.id, publishedId);
+  const replacement = saveQuestion(admin, { ...question, questionId: original.questionId, expectedRevision: 1 });
+  assert.equal(listBank(admin).find(q => q.id === replacement)?.revision, 3);
+  assert.throws(() => saveQuestion(admin, { ...question, questionId: original.questionId, expectedRevision: 2 }), { status: 409 });
+});
+
+test("bulk draft deletion rolls back for a changed state or a reference from a package or attempt", () => {
+  const draftId = saveQuestion(admin, question);
+  const referencedId = publish(admin);
+  const packageId = pack(admin, [referencedId]);
+  const attemptId = startAssessment(student, { packageId });
+  const ids = [draftId, referencedId];
+  assert.throws(() => transitionQuestions(admin, ids, "deleteDraft", ""), { status: 409, message: /berstatus Draf/ });
+
+  // Imported databases may include a draft referenced by a historical snapshot.
+  const snapshot = db().prepare("SELECT snapshot_json FROM assessment_packages WHERE id=?").get(packageId)!.snapshot_json;
+  const changeSnapshot = db().prepare("UPDATE assessment_packages SET snapshot_json=? WHERE id=?");
+  const changeState = db().prepare("UPDATE question_revisions SET state=? WHERE id=?");
+  try {
+    changeState.run("draft", referencedId);
+    const conflict = { status: 409, message: /dirujuk paket atau sesi ujian/ };
+    assert.throws(() => transitionQuestions(admin, ids, "deleteDraft", ""), conflict);
+    changeSnapshot.run('{"questions":[]}', packageId);
+    assert.throws(() => transitionQuestions(admin, ids, "deleteDraft", ""), conflict);
+  } finally {
+    changeState.run("published", referencedId);
+    changeSnapshot.run(snapshot, packageId);
+  }
+  assert.ok(listBank(admin).some(q => q.id === draftId));
+  assert.ok(listBank(admin).some(q => q.id === referencedId));
+  assert.ok(db().prepare("SELECT id FROM assessment_attempts WHERE id=?").get(attemptId));
+});
+
 test("packages require reviewed accessible revisions and cannot publish private material publicly",()=>{
   const draft=saveQuestion(admin,question);assert.throws(()=>createPackage(admin,{examId:"casn-tiu",title:"Draft selection",revisionIds:[draft]}));
   const privateId=publish(teacher);
@@ -70,13 +116,13 @@ test("frozen package and attempt keep original key after revision, profile chang
   const profile=examProfiles().find(p=>p.id==="casn-tiu")!;saveExamProfile(admin,{...profile,title:"Profil baru",sections:profile.sections.map(s=>({...s,title:"Updated "+s.title}))});
   transitionPackage(admin,packageId,"archive");assert.throws(()=>startAssessment(student,{packageId}));
   mutateAssessment(attemptId,student.id,{action:"answer",questionId:id,choice:0});
-  const finished=publicAssessment(mutateAssessment(attemptId,student.id,{action:"advance"}));assert.equal(finished.result?.correct,1);assert.equal(finished.result?.details[0].answer,0);assert.notEqual(finished.examTitle,"Profil baru");
-  const retry=publicAssessment(mutateAssessment(attemptId,student.id,{action:"advance"}));assert.equal(retry.result?.total,1);
+  const finished=publicAssessment(mutateAssessment(attemptId,student.id,{action:"advance",sectionIndex:0}));assert.equal(finished.result?.correct,1);assert.equal(finished.result?.details[0].answer,0);assert.notEqual(finished.examTitle,"Profil baru");
+  const retry=publicAssessment(mutateAssessment(attemptId,student.id,{action:"advance",sectionIndex:0}));assert.equal(retry.result?.total,1);
 });
 test("five choices and weighted raw points work without official score conversion",()=>{
   const id=publish(admin,{scores:[5,3,2,1,0]}),packageId=pack(admin,[id]),attempt=startAssessment(student,{packageId});
   mutateAssessment(attempt,student.id,{action:"answer",questionId:id,choice:4});
-  const result=publicAssessment(mutateAssessment(attempt,student.id,{action:"advance"})).result!;
+  const result=publicAssessment(mutateAssessment(attempt,student.id,{action:"advance",sectionIndex:0})).result!;
   assert.equal(result.points,0);assert.equal(result.maxPoints,5);assert.equal(result.correct,0);
 });
 test("timers survive refresh, lock previous sections, and auto-finish at server deadline",()=>{
@@ -87,6 +133,31 @@ test("timers survive refresh, lock previous sections, and auto-finish at server 
   assert.throws(()=>mutateAssessment(id,student.id,{action:"answer",questionId:first,choice:0},row.started_at+1200));
   const ended=publicAssessment(loadAssessment(id,student.id,row.started_at+2100));assert.equal(ended.status,"finished");assert.equal(ended.result?.total,2);assert.equal(ended.result?.correct,0);
 });
+test("stale advance requests and late answers cannot advance or change a newer section",()=>{
+  const first=publish(admin),second=publish(admin,{section:"verbal"}),third=publish(admin,{section:"figural"});
+  const packageId=pack(admin,[first,second,third],{durations:{numerik:1,verbal:1,figural:1}});
+  const id=startAssessment(student,{packageId}),start=loadAssessment(id,student.id).started_at;
+  const advance=(sectionIndex:number, at:number)=>mutateAssessment(id,student.id,{action:"advance",sectionIndex},at);
+  assert.equal(advance(0,start+1100).section_index,1);
+  assert.equal(advance(0,start+1200).section_index,1);
+  assert.equal(advance(1,start+1300).section_index,2);
+  assert.equal(advance(1,start+1350).section_index,2);
+  assert.throws(()=>mutateAssessment(id,student.id,{action:"answer",questionId:third,choice:0},start+2500),{status:409});
+  const finished=publicAssessment(loadAssessment(id,student.id,start+2500));
+  assert.equal(finished.status,"finished");
+  assert.equal(finished.result?.details[2].selected,null);
+  assert.equal(finished.finishedAt,start+2300);
+});
+test("audio questions require a script when saved or when a legacy draft is published",()=>{
+  assert.throws(()=>saveQuestion(admin,{...question,kind:"audio",stimulus:" "}),{status:400});
+  assert.throws(()=>saveQuestion(admin,{...question,kind:"audio",stimulus:"Speaker:"}),{status:400});
+  const id=saveQuestion(admin,{...question,kind:"audio",stimulus:"Speaker: Listen to this example."});
+  const row=listBank(admin).find(q=>q.id===id)!;
+  db().prepare("UPDATE question_revisions SET content_json=? WHERE id=?").run(JSON.stringify({...row.content,stimulus:""}),id);
+  transitionQuestions(admin,[id],"review","");
+  assert.throws(()=>transitionQuestions(admin,[id],"publish","Naskah wajib diperiksa sebelum terbit."),{status:409});
+  assert.equal(listBank(admin).find(q=>q.id===id)?.state,"review");
+});
 test("tasks enforce class ownership, enrollment, deadline, and one attempt",()=>{
   const q=publish(teacher),packageId=pack(teacher,[q]),classroomId=createClassroom(teacher,"Learning class");
   const code=(db().prepare("SELECT join_code FROM classrooms WHERE id=?").get(classroomId) as {join_code:string}).join_code;joinClassroom(student,code);
@@ -94,11 +165,11 @@ test("tasks enforce class ownership, enrollment, deadline, and one attempt",()=>
   assert.throws(()=>createAssessmentTask(teacher,{classroomId,packageId,title:"Expired",dueAt:"2000-01-01T00:00:00Z"}));
   const task=createAssessmentTask(teacher,{classroomId,packageId,title:"Task one"});assert.throws(()=>startAssessment(outsider,{taskId:task}));
   const attempt=startAssessment(student,{taskId:task});assert.equal(startAssessment(student,{taskId:task}),attempt);
-  assert.throws(()=>loadAssessment(attempt,outsider.id));assert.throws(()=>mutateAssessment(attempt,outsider.id,{action:"advance"}));
+  assert.throws(()=>loadAssessment(attempt,outsider.id));assert.throws(()=>mutateAssessment(attempt,outsider.id,{action:"advance",sectionIndex:0}));
   db().prepare("UPDATE assessment_tasks SET due_at=1 WHERE id=?").run(task);assert.equal(startAssessment(student,{taskId:task}),attempt);
   const late=createAssessmentTask(teacher,{classroomId,packageId,title:"Task two"});db().prepare("UPDATE assessment_tasks SET due_at=1 WHERE id=?").run(late);assert.throws(()=>startAssessment(student,{taskId:late}));
-  assert.ok(studentTasks(student.id).some(t=>t.attempt_id===attempt));
-  mutateAssessment(attempt,student.id,{action:"answer",questionId:q,choice:0});mutateAssessment(attempt,student.id,{action:"advance"});
+  assert.ok(studentClassTasks(student.id).some(t=>t.attempt_id===attempt));
+  mutateAssessment(attempt,student.id,{action:"answer",questionId:q,choice:0});mutateAssessment(attempt,student.id,{action:"advance",sectionIndex:0});
   assert.equal(analytics(teacher).attempts.length,1);assert.equal(analytics(other).attempts.length,0);
   assert.ok(analytics(admin).attempts.length>analytics(teacher).attempts.length);
 });
@@ -109,7 +180,7 @@ test("descriptive analytics count omissions and separate revisions; observed tim
   mutateAssessment(id,student.id,{action:"view",questionId:first,visible:true},t+60000);
   mutateAssessment(id,student.id,{action:"view",questionId:first,visible:false},t+65000);
   mutateAssessment(id,student.id,{action:"answer",questionId:first,choice:0},t+70000);
-  mutateAssessment(id,student.id,{action:"advance"},t+80000);
+  mutateAssessment(id,student.id,{action:"advance",sectionIndex:0},t+80000);
   const report=analytics(admin,{packageId}),one=report.items.find(i=>i.revisionId===first)!,two=report.items.find(i=>i.revisionId===second)!;
   assert.equal(one.meanObservedMs,20000);assert.equal(one.choices[0],1);assert.equal(one.correctRate,1);
   assert.equal(two.unanswered,1);assert.equal(two.correctRate,0);assert.equal(two.meanObservedMs,null);
@@ -118,6 +189,32 @@ test("descriptive analytics count omissions and separate revisions; observed tim
 test("retired questions prevent new starts but do not destroy active sessions",()=>{
   const q=publish(admin),packageId=pack(admin,[q]),id=startAssessment(student,{packageId});transitionQuestions(admin,[q],"retire","");
   assert.throws(()=>startAssessment(outsider,{packageId}));assert.equal(loadAssessment(id,student.id).status,"active");
+});
+test("seeded TOEFL options are shuffled in new package sessions with canonical analytics",()=>{
+  const seeded=listBank(admin).filter(q=>q.questionId.startsWith("legacy-R-1-")).slice(0,4);
+  assert.equal(seeded.length,4);
+  transitionQuestions(admin,seeded.map(q=>q.id),"review","");
+  transitionQuestions(admin,seeded.map(q=>q.id),"publish","Original reading options have been reviewed.");
+  const packageId=createPackage(admin,{examId:"toefl-itp",title:"Seed option order",revisionIds:seeded.map(q=>q.id),durations:{reading:0},visibility:"public"});
+  transitionPackage(admin,packageId,"publish");
+  const id=startAssessment(student,{packageId});
+  db().prepare("UPDATE assessment_attempts SET option_seed=? WHERE id=?").run("package-order-regression",id);
+  const shown=publicAssessment(loadAssessment(id,student.id));
+  assert.notDeepEqual(shown.questions.map(q=>q.options),seeded.map(q=>q.content.options));
+  for(const item of shown.questions) {
+    const source=seeded.find(q=>q.id===item.id)!.content;
+    const choice=item.options.indexOf(source.options[source.answer]);
+    mutateAssessment(id,student.id,{action:"answer",questionId:item.id,choice});
+  }
+  const finished=publicAssessment(mutateAssessment(id,student.id,{action:"advance",sectionIndex:0}));
+  assert.equal(finished.result?.correct,4);
+  assert.ok(finished.result?.details.every(q=>q.selected===q.answer));
+  const report=analytics(admin,{packageId});
+  for(const source of seeded)assert.equal(report.items.find(q=>q.revisionId===source.id)?.choices[source.content.answer],1);
+
+  const old=startAssessment(outsider,{packageId});
+  db().prepare("UPDATE assessment_attempts SET option_seed=NULL WHERE id=?").run(old);
+  assert.deepEqual(publicAssessment(loadAssessment(old,outsider.id)).questions.map(q=>q.options),seeded.map(q=>q.content.options));
 });
 test("reports settle expired timed attempts without requiring the participant to return",()=>{
   const q=publish(admin),packageId=pack(admin,[q],{durations:{numerik:1}}),id=startAssessment(student,{packageId});

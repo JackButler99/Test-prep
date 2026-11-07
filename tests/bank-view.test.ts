@@ -6,6 +6,7 @@ const question = { examId: "toefl-itp", section: "reading", kind: "text", prompt
 const row = (state: string, ownerId = "instructor") => ({ id: state, state, ownerId } as BankRow);
 test("bulk actions follow state and role, including mixed/foreign selections", () => {
   assert.deepEqual(availableBankActions([row("draft")], false, "instructor").map(a => a.id), ["review"]);
+  assert.deepEqual(availableBankActions([row("draft")], true, "admin").map(a => a.id), ["review", "deleteDraft"]);
   assert.deepEqual(availableBankActions([row("review")], true, "admin").map(a => a.id), ["publish", "reopen"]);
   assert.deepEqual(availableBankActions([row("published")], true, "admin").map(a => a.id), ["retire"]);
   for (const rows of [[], [row("retired")], [row("draft"), row("review")], [row("draft", "other")]]) assert.deepEqual(availableBankActions(rows, false, "instructor"), []);

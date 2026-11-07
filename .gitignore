@@ -8,3 +8,4 @@ data/
 backup-data*/
 test-results/
 next-env.d.ts
+/patches/

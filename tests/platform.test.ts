@@ -26,7 +26,35 @@ test("additive migration preserves legacy accounts, answers, and student default
   migratePlatform(c);migratePlatform(c);
   assert.equal((c.prepare("SELECT role FROM users").get() as {role:string}).role,"student");
   assert.equal((c.prepare("SELECT answers FROM attempts").get() as {answers:string}).answers,'{"a":2}');
+  assert.equal(c.prepare("SELECT option_seed FROM attempts").get()?.option_seed,null);
   c.close();
+});
+test("new TOEFL option order is session-stable while old answers retain their meaning",()=>{
+  const user=register("option_order",password);
+  const id=createAttempt(user.id,"practice","listening"),secondId=createAttempt(user.id,"practice","listening");
+  const setSeed=db().prepare("UPDATE attempts SET option_seed=? WHERE id=?");
+  setSeed.run("regression-seed-one",id);
+  setSeed.run("regression-seed-two",secondId);
+  const display=(attemptId:string)=>serializeAttempt(loadAttempt(attemptId,user.id)!);
+  const canonical=getQuestions("practice","listening"),first=display(id);
+  assert.notDeepEqual(first.questions.map(q=>q.options),canonical.map(q=>q.options));
+  assert.notDeepEqual(first.questions.map(q=>q.options),display(secondId).questions.map(q=>q.options));
+  assert.deepEqual(display(id).questions,first.questions);
+  const answer=canonical[0].options[canonical[0].answer];
+  const choice=first.questions[0].options.indexOf(answer);
+  saveAnswer(id,user.id,canonical[0].id,choice);
+  assert.equal(display(id).answers[canonical[0].id],choice);
+  const result=serializeAttempt(advanceAttempt(id,user.id,0));
+  assert.ok("details" in result);
+  assert.equal(result.totalCorrect,1);
+  assert.equal(result.questions[0].options[result.details[0].correct],answer);
+
+  setSeed.run(null,secondId);
+  db().prepare("UPDATE attempts SET answers=? WHERE id=?").run(JSON.stringify({[canonical[0].id]:canonical[0].answer}),secondId);
+  const historical=serializeAttempt(advanceAttempt(secondId,user.id,0));
+  assert.deepEqual(historical.questions.map(q=>q.options),canonical.map(q=>q.options));
+  assert.ok("totalCorrect" in historical);
+  assert.equal(historical.totalCorrect,1);
 });
 test("public accounts are students; instructor requires admin review",()=>{
   const student=register("student_a",password),admin=role(register("admin_a",password),"admin");
@@ -53,9 +81,13 @@ test("instructors cannot access other classes; personal attempts never enter cla
   assert.throws(()=>createAttempt(student.id,"practice","structure",task));
   assert.equal(loadAttempt(assigned,outsider.id),null);
   const row=loadAttempt(assigned,student.id)!;
-  for(const q of getQuestions("practice","structure"))saveAnswer(row,q.id,q.answer);
+  const shown = serializeAttempt(row).questions;
+  for(const q of getQuestions("practice","structure")) {
+    const options = shown.find(item => item.id === q.id)!.options;
+    saveAnswer(row.id,row.user_id,q.id,options.indexOf(q.options[q.answer]));
+  }
   assert.ok(!(serializeAttempt(row) as Record<string,unknown>).details);
-  advanceAttempt(row);
+  advanceAttempt(row.id,row.user_id,0);
   assert.equal(instructorClasses(teacher)[0].results.length,1);
   assert.equal(instructorClasses(teacher)[0].results[0].correct,10);
   assert.equal(instructorClasses(other).length,0);
@@ -94,17 +126,17 @@ test("only fully answered personal practice started after exposure can convert; 
   const id=createExperiment(admin,{name:"Completion test",hypothesis:"Clear copy improves completion",control:"Ten questions",treatment:"Find mistakes",baseline:.2,mde:.1,minDays:7});transitionExperiment(admin,id,"start");getPrompt(student);expose(student,id);
   db().prepare("UPDATE attempts SET started_at=1 WHERE id=?").run(oldAttempt);
   const old=loadAttempt(oldAttempt,student.id)!;
-  for(const q of getQuestions("practice","structure"))saveAnswer(old,q.id,q.answer);advanceAttempt(old);
+  for(const q of getQuestions("practice","structure"))saveAnswer(old.id,old.user_id,q.id,q.answer);advanceAttempt(old.id,old.user_id,0);
   const event=()=>db().prepare("SELECT * FROM experiment_assignments WHERE experiment_id=? AND user_id=?").get(id,student.id) as {converted_at:number|null;started_at:number|null};
   assert.equal(event().converted_at,null);
-  const partial=loadAttempt(createAttempt(student.id,"practice","structure"),student.id)!;advanceAttempt(partial);assert.equal(event().converted_at,null);
+  const partial=loadAttempt(createAttempt(student.id,"practice","structure"),student.id)!;advanceAttempt(partial.id,partial.user_id,0);assert.equal(event().converted_at,null);
   const fresh=loadAttempt(createAttempt(student.id,"practice","structure"),student.id)!;
-  for(const q of getQuestions("practice","structure"))saveAnswer(fresh,q.id,q.answer);advanceAttempt(fresh);
+  for(const q of getQuestions("practice","structure"))saveAnswer(fresh.id,fresh.user_id,q.id,q.answer);advanceAttempt(fresh.id,fresh.user_id,0);
   assert.ok(event().converted_at);assert.ok(event().started_at);
   const converted=event().converted_at;
-  const fresh2=loadAttempt(createAttempt(student.id,"practice","structure"),student.id)!;for(const q of getQuestions("practice","structure"))saveAnswer(fresh2,q.id,0);advanceAttempt(fresh2);assert.equal(event().converted_at,converted);
+  const fresh2=loadAttempt(createAttempt(student.id,"practice","structure"),student.id)!;for(const q of getQuestions("practice","structure"))saveAnswer(fresh2.id,fresh2.user_id,q.id,0);advanceAttempt(fresh2.id,fresh2.user_id,0);assert.equal(event().converted_at,converted);
   const stale=register("experiment_stale",password);getPrompt(stale);expose(stale,id);db().prepare("UPDATE experiment_assignments SET exposed_at=? WHERE user_id=?").run(Date.now()-8*86400000,stale.id);
-  const late=loadAttempt(createAttempt(stale.id,"practice","structure"),stale.id)!;for(const q of getQuestions("practice","structure"))saveAnswer(late,q.id,0);advanceAttempt(late);
+  const late=loadAttempt(createAttempt(stale.id,"practice","structure"),stale.id)!;for(const q of getQuestions("practice","structure"))saveAnswer(late.id,late.user_id,q.id,0);advanceAttempt(late.id,late.user_id,0);
   assert.equal((db().prepare("SELECT converted_at FROM experiment_assignments WHERE user_id=?").get(stale.id) as {converted_at:null}).converted_at,null);
   transitionExperiment(admin,id,"end");
   db().prepare("UPDATE experiment_assignments SET exposed_at=? WHERE experiment_id=?").run(Date.now()-8*86400000,id);

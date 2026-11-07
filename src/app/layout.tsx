@@ -4,6 +4,7 @@ import "./typography.css";
 import "./disclosure.css";
 import "./bank.css";
 import "./reading.css";
+import "./exam-room.css";
 
 export const metadata: Metadata = {
   title: "ITP Practice Lab",

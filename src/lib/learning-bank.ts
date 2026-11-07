@@ -1,20 +1,19 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { db } from "./db";
+import { db, transaction } from "./db";
 import { assertRole } from "./access";
 import type { User } from "./auth";
 import { HttpError } from "./http";
 import { audit } from "./experiments";
 import { getQuestions } from "./questions";
+import { splitSpeechLines } from "./listening-speech";
 import { assertQuestionInput } from "./question-input";
 import { assertDailyImportCapacity, assertQuestionCapacity } from "./import-quota";
+import { itpAudioAvailable } from "./itp-simulation";
 import type { BankRow, ExamProfile, ExamSection, LearningPackage, PackageSnapshot, QuestionContent } from "./learning-types";
 
-export function transaction<T>(work:()=>T):T {
-  db().exec("BEGIN IMMEDIATE");
-  try { const result=work();db().exec("COMMIT");return result; }
-  catch(error){db().exec("ROLLBACK");throw error;}
-}
+export { transaction } from "./db";
+
 export function ensureLearningSeed() {
   if(db().prepare("SELECT 1 FROM learning_meta WHERE key='seed-v1'").get())return;
   transaction(()=>{
@@ -65,20 +64,25 @@ export function saveExamProfile(user:User,input:Record<string,unknown>) {
 }
 type RevisionRow={id:string;question_id:string;revision:number;exam_id:string;section_key:string;content_json:string;state:string;visibility:string;owner_id:string|null;review_note:string};
 function bankRow(r:RevisionRow):BankRow {return {id:r.id,questionId:r.question_id,revision:r.revision,examId:r.exam_id,section:r.section_key,state:r.state,visibility:r.visibility,ownerId:r.owner_id,reviewNote:r.review_note,content:JSON.parse(r.content_json)};}
-export function listBank(user:User,publishedOnly=false):BankRow[] {
+export function listBank(user:User, view:"latest"|"published"|"history"="latest"):BankRow[] {
   assertRole(user,"admin","instructor");ensureLearningSeed();
   const rows=db().prepare(`SELECT r.*,q.visibility,q.owner_id FROM question_revisions r JOIN bank_questions q ON q.id=r.question_id
     WHERE (?='admin' OR q.visibility='public' OR q.owner_id=?)
-    AND ${publishedOnly?"r.state='published' AND r.revision=(SELECT MAX(x.revision) FROM question_revisions x WHERE x.question_id=r.question_id AND x.state='published')":"r.revision=(SELECT MAX(x.revision) FROM question_revisions x WHERE x.question_id=r.question_id)"}
+    AND ${view==="history"?"1":view==="published"?"r.state='published' AND r.revision=(SELECT MAX(x.revision) FROM question_revisions x WHERE x.question_id=r.question_id AND x.state='published')":"r.revision=(SELECT MAX(x.revision) FROM question_revisions x WHERE x.question_id=r.question_id)"}
     ORDER BY r.created_at DESC,r.id`).all(user.role,user.id) as RevisionRow[];
   return rows.map(bankRow);
 }
+function hasUsableStimulus(question: Pick<QuestionContent, "kind" | "stimulus">) {
+  return question.kind !== "audio" || splitSpeechLines(question.stimulus).some(line => line.text.trim());
+}
+
 function normalizeQuestion(input:Record<string,unknown>) {
   const examId=text(input.examId,"Ujian",50),section=text(input.section,"Bagian",40);
   const profile=examProfiles().find(p=>p.id===examId);
   if(!profile||!profile.sections.some(s=>s.key===section))throw new HttpError("Ujian atau bagian tidak tersedia.",400);
   const kind=input.kind;if(kind!=="text"&&kind!=="audio")throw new HttpError("Jenis soal harus text atau audio.",400);
   const stimulus=text(input.stimulus??"","Stimulus",12000,0),prompt=text(input.prompt,"Pertanyaan",2000),explanation=text(input.explanation,"Pembahasan",8000),skill=text(input.skill,"Kompetensi",100);
+  if(!hasUsableStimulus({kind,stimulus}))throw new HttpError("Soal audio memerlukan naskah yang dapat dibacakan.",400);
   if(!Array.isArray(input.options)||input.options.length<2||input.options.length>5)throw new HttpError("Soal memerlukan 2–5 pilihan.",400);
   const options=input.options.map(v=>text(v,"Pilihan",2000));
   if(new Set(options).size!==options.length)throw new HttpError("Pilihan jawaban harus berbeda.",400);
@@ -88,6 +92,8 @@ function normalizeQuestion(input:Record<string,unknown>) {
   if(!Array.isArray(scores)||scores.length!==options.length||scores.some(n=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>10)||Math.max(...scores)<=0||scores[answer]!==Math.max(...scores)||scores.filter(n=>n===scores[answer]).length!==1)throw new HttpError("Bobot 0–10 harus memiliki satu nilai tertinggi pada kunci.",400);
   return {examId,section,content:{kind,stimulus,prompt,options,answer,explanation,skill,scores} as QuestionContent};
 }
+const revisionFloorKey = (questionId: string) => `question-revision-floor:${questionId}`;
+
 function insertQuestion(user:User,input:Record<string,unknown>) {
   const {examId,section,content}=normalizeQuestion(input);
   const questionId=input.questionId?String(input.questionId):randomUUID();
@@ -97,7 +103,8 @@ function insertQuestion(user:User,input:Record<string,unknown>) {
     if(!old||(user.role!=="admin"&&old.owner_id!==user.id))throw new HttpError("Soal tidak ditemukan.",404);
     const latest=db().prepare("SELECT MAX(revision) AS revision FROM question_revisions WHERE question_id=?").get(questionId) as {revision:number};
     if(Number(input.expectedRevision)!==latest.revision)throw new HttpError("Soal berubah. Muat ulang sebelum menyimpan.",409);
-    revision=latest.revision+1;
+    const floor = db().prepare("SELECT value FROM learning_meta WHERE key=?").get(revisionFloorKey(questionId));
+    revision = Math.max(latest.revision, Number(floor?.value ?? 0)) + 1;
     db().prepare("UPDATE question_revisions SET state='retired' WHERE question_id=? AND state IN ('draft','review')").run(questionId);
   } else { assertQuestionCapacity(user.id,1); db().prepare("INSERT INTO bank_questions VALUES(?,?,?,?)").run(questionId,user.id,user.role==="admin"?"public":"private",Date.now()); }
   const id=randomUUID();
@@ -123,9 +130,48 @@ export function importQuestions(user:User,items:unknown) {
     return ids;
   });
 }
+function deleteDraftRevisions(user: User, ids: string[]) {
+  assertRole(user, "admin");
+  transaction(() => {
+    const connection = db();
+    const placeholders = ids.map(() => "?").join(",");
+    const drafts = connection.prepare(`SELECT id,question_id,revision,state FROM question_revisions WHERE id IN (${placeholders})`)
+      .all(...ids) as { id: string; question_id: string; revision: number; state: string }[];
+    if (drafts.length !== ids.length) throw new HttpError("Soal tidak ditemukan. Muat ulang daftar soal.", 404);
+    if (drafts.some(row => row.state !== "draft")) throw new HttpError("Hanya soal berstatus Draf yang dapat dihapus.", 409);
+
+    const inUse = connection.prepare(`
+      SELECT 1 FROM assessment_responses WHERE revision_id IN (${placeholders})
+      UNION ALL
+      SELECT 1 FROM (
+        SELECT snapshot_json FROM assessment_packages
+        UNION ALL SELECT snapshot_json FROM assessment_attempts
+      ) AS snapshots, json_each(snapshots.snapshot_json, '$.questions') AS question
+      WHERE (question.value ->> 'id') IN (${placeholders})
+      LIMIT 1`).get(...ids, ...ids);
+    if (inUse) throw new HttpError("Draf yang dirujuk paket atau sesi ujian tidak dapat dihapus.", 409);
+
+    const removeRevision = connection.prepare("DELETE FROM question_revisions WHERE id=?");
+    const removeEmptyQuestion = connection.prepare(`DELETE FROM bank_questions WHERE id=?
+      AND NOT EXISTS (SELECT 1 FROM question_revisions WHERE question_id=?)`);
+    const removeFloor = connection.prepare("DELETE FROM learning_meta WHERE key=?");
+    const setFloor = connection.prepare(`INSERT INTO learning_meta (key,value) VALUES (?,?)
+      ON CONFLICT(key) DO UPDATE SET value=MAX(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))`);
+    for (const draft of drafts) {
+      removeRevision.run(draft.id);
+      const key = revisionFloorKey(draft.question_id);
+      // Keep revision numbers unique even after deleting the latest revision.
+      if (removeEmptyQuestion.run(draft.question_id, draft.question_id).changes) removeFloor.run(key);
+      else setFloor.run(key, draft.revision);
+      audit(user.id, "question.draft.deleted", draft.id);
+    }
+  });
+}
+
 export function transitionQuestions(user:User,ids:unknown,action:string,note:unknown) {
   assertRole(user,"admin","instructor");ensureLearningSeed();
   if(!Array.isArray(ids)||!ids.length||ids.length>50||ids.some(id=>typeof id!=="string")||new Set(ids).size!==ids.length)throw new HttpError("Pilih 1–50 revisi unik.",400);
+  if (action === "deleteDraft") return deleteDraftRevisions(user, ids);
   const next:Record<string,string>={review:"review",publish:"published",reopen:"draft",retire:"retired"};
   if(!next[action])throw new HttpError("Aksi review tidak valid.",400);
   if(action!=="review")assertRole(user,"admin");
@@ -135,6 +181,7 @@ export function transitionQuestions(user:User,ids:unknown,action:string,note:unk
     if(!row||(user.role!=="admin"&&row.owner_id!==user.id))throw new HttpError("Soal tidak ditemukan.",404);
     const permitted:Record<string,string[]>={review:["draft"],publish:["review"],reopen:["review"],retire:["published"]};
     if(!permitted[action].includes(row.state))throw new HttpError("Transisi status soal tidak valid.",409);
+    if(action==="publish"&&!hasUsableStimulus(JSON.parse(row.content_json)))throw new HttpError("Soal audio memerlukan naskah yang dapat dibacakan sebelum terbit.",409);
     db().prepare("UPDATE question_revisions SET state=?,review_note=?,reviewed_by=? WHERE id=?").run(next[action],reviewNote,action==="publish"?user.id:null,id);
     audit(user.id,"question."+action,id);
   }});
@@ -150,7 +197,7 @@ export function createPackage(user:User,input:Record<string,unknown>) {
   if(!profile)throw new HttpError("Ujian aktif tidak ditemukan.",404);
   const title=text(input.title,"Judul paket",160),ids=input.revisionIds;
   if(!Array.isArray(ids)||!ids.length||ids.length>200||new Set(ids).size!==ids.length)throw new HttpError("Pilih 1–200 revisi unik.",400);
-  const bank=listBank(user,true),questions=ids.map(id=>bank.find(q=>q.id===id));
+  const bank=listBank(user,"published"),questions=ids.map(id=>bank.find(q=>q.id===id));
   if(questions.some(q=>!q||q.examId!==profile.id)||new Set(questions.map(q=>q!.questionId)).size!==questions.length)throw new HttpError("Paket hanya boleh memakai revisi terbit yang dapat diakses dari satu ujian.",400);
   const durations=input.durations as Record<string,unknown>|undefined;
   const sections:ExamSection[]=profile.sections.filter(s=>questions.some(q=>q!.section===s.key)).map(s=>{
@@ -164,13 +211,18 @@ export function createPackage(user:User,input:Record<string,unknown>) {
   if(visibility==="public"&&questions.some(q=>q!.visibility!=="public"))throw new HttpError("Paket publik tidak boleh membocorkan soal privat instruktur.",400);
   const id=randomUUID();db().prepare("INSERT INTO assessment_packages VALUES(?,?,?,?,?,'draft',?,?)").run(id,user.id,profile.id,title,visibility,JSON.stringify(snapshot),Date.now());audit(user.id,"package.created",id);return id;
 }
+export function packageMaterialsAvailable(snapshot: PackageSnapshot) {
+  const published = db().prepare("SELECT 1 FROM question_revisions WHERE id=? AND state='published'");
+  return itpAudioAvailable(snapshot) && snapshot.questions.length > 0 && snapshot.questions.every(q => hasUsableStimulus(q) && published.get(q.id));
+}
+
 function assertPublicPackageSources(snapshot:PackageSnapshot) {
   const lookup=db().prepare("SELECT r.state,q.visibility FROM question_revisions r JOIN bank_questions q ON q.id=r.question_id WHERE r.id=? AND q.id=?");
   if(!snapshot.questions.length)throw new HttpError("Paket kosong tidak dapat dibuka untuk publik.",409);
   for(const q of snapshot.questions){
     const source=lookup.get(q.id,q.questionId) as {state:string;visibility:string}|undefined;
     if(!source||source.visibility!=="public")throw new HttpError("Paket memuat soal privat atau sumber yang tidak tersedia. Susun paket dari soal publik sebelum membuka akses.",409);
-    if(source.state!=="published")throw new HttpError("Ada revisi yang tidak lagi terbit. Susun paket baru dari revisi terbit.",409);
+    if(source.state!=="published"||!hasUsableStimulus(q))throw new HttpError("Ada revisi yang tidak lagi terbit. Susun paket baru dari revisi terbit.",409);
   }
 }
 export function setPackageVisibility(user:User,input:Record<string,unknown>) {
@@ -197,6 +249,7 @@ export function transitionPackage(user:User,id:string,action:string) {
     const pack=listPackages(user).find(p=>p.id===id);
     if(!pack||(user.role!=="admin"&&pack.ownerId!==user.id))throw new HttpError("Paket tidak ditemukan.",404);
     if(action==="publish"&&pack.state==="draft"){
+      if (!itpAudioAvailable(pack.snapshot)) throw new HttpError("Materi atau audio simulasi belum lengkap.", 409);
       if(pack.visibility==="public")assertPublicPackageSources(pack.snapshot);
       else for(const q of pack.snapshot.questions){const row=db().prepare("SELECT state FROM question_revisions WHERE id=?").get(q.id) as {state:string}|undefined;if(row?.state!=="published")throw new HttpError("Ada revisi yang tidak lagi terbit. Susun paket baru.",409);}
       db().prepare("UPDATE assessment_packages SET state='published' WHERE id=?").run(id);

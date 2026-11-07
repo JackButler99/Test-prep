@@ -34,7 +34,7 @@ test("admin changes access without publishing or replacing the snapshot; existin
   assert.ok(!listPackages(outsider).some(p=>p.id===id));status(()=>startAssessment(outsider,{packageId:id}),404);
   const current=loadAssessment(attempt,student.id);assert.equal(current.status,"active");
   const q=JSON.parse(current.snapshot_json).questions[0];mutateAssessment(attempt,student.id,{action:"answer",questionId:q.id,choice:0});
-  assert.equal(publicAssessment(mutateAssessment(attempt,student.id,{action:"advance"})).result?.correct,1);
+  assert.equal(publicAssessment(mutateAssessment(attempt,student.id,{action:"advance",sectionIndex:0})).result?.correct,1);
   assert.equal(row(id).snapshot_json,before.snapshot_json);assert.equal(row(id).owner_id,before.owner_id);assert.equal(auditCount(id),2);
 });
 test("instructors and students cannot change access, even for their own package",()=>{

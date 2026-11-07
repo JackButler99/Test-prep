@@ -3,6 +3,7 @@ import type { BankRow } from "./learning-types";
 export const BANK_STATES = ["draft", "review", "published", "retired"] as const;
 export const BANK_ACTIONS = [
   { id: "review", label: "Ajukan review", from: "draft", admin: false },
+  { id: "deleteDraft", label: "Hapus draf", from: "draft", admin: true },
   { id: "publish", label: "Terbitkan", from: "review", admin: true },
   { id: "reopen", label: "Kembalikan ke draft", from: "review", admin: true },
   { id: "retire", label: "Tarik dari penerbitan", from: "published", admin: true },

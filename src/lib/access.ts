@@ -9,6 +9,6 @@ export async function dashboardUser(...roles: Role[]): Promise<User> {
   const { redirect } = await import("next/navigation");
   const user = await getUser();
   if (!user) return redirect("/login");
-  if (!roles.includes(user.role)) return redirect("/dashboard");
+  if (!roles.includes(user.role)) return redirect("/");
   return user;
 }

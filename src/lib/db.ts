@@ -5,9 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 import { migratePlatform } from "./schema";
 
 let singleton: DatabaseSync | undefined;
+export function dataDirectory() {
+  return process.env.DATA_DIR || join(process.cwd(), "data");
+}
+
 export function db(): DatabaseSync {
   if (singleton) return singleton;
-  const directory = process.env.DATA_DIR || join(process.cwd(), "data");
+  const directory = dataDirectory();
   mkdirSync(directory, { recursive: true });
   const connection = new DatabaseSync(join(directory, "app.sqlite"));
   connection.exec(`
@@ -35,4 +39,17 @@ export function db(): DatabaseSync {
   catch (cause) { connection.close(); throw cause; }
   singleton = connection;
   return connection;
+}
+
+export function transaction<T>(work: () => T): T {
+  const connection = db();
+  connection.exec("BEGIN IMMEDIATE");
+  try {
+    const result = work();
+    connection.exec("COMMIT");
+    return result;
+  } catch (error) {
+    connection.exec("ROLLBACK");
+    throw error;
+  }
 }

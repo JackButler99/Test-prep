@@ -11,12 +11,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 const directory=mkdtempSync(join(tmpdir(),'itp-http-smoke-'));
 const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));
 const port=probe.address().port;await new Promise(r=>probe.close(r));
-const base=`http://127.0.0.1:${port}`,env={...process.env,DATA_DIR:directory,NEXT_TELEMETRY_DISABLED:'1',APP_ORIGIN:base,BANK_IMPORT_DAILY_QUESTIONS:'500',BANK_MAX_OWNED_QUESTIONS:'5000'};
+const base=`http://127.0.0.1:${port}`,env={...process.env,DATA_DIR:directory,NEXT_TELEMETRY_DISABLED:'1',APP_ORIGIN:base,AUTH_CLIENT_IP_HEADER:'x-test-client-ip',BANK_IMPORT_DAILY_QUESTIONS:'500',BANK_MAX_OWNED_QUESTIONS:'5000'};
 const server=spawn(process.execPath,['node_modules/next/dist/bin/next','start','-H','127.0.0.1','-p',String(port)],{env,stdio:['ignore','pipe','pipe']});
 let logs='';for(const stream of [server.stdout,server.stderr])stream.on('data',chunk=>{logs=(logs+String(chunk)).slice(-12000);});
 let connection;
-async function post(path,body,cookie='') {
-  const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json',origin:base,...(cookie?{cookie}:{})},body:JSON.stringify(body)});
+async function post(path,body,cookie='',clientIp='192.0.2.10') {
+  const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json',origin:base,'x-test-client-ip':clientIp,...(cookie?{cookie}:{})},body:JSON.stringify(body)});
   return {status:response.status,data:await response.json(),cookie:response.headers.getSetCookie().map(s=>s.split(';')[0]).join('; ')};
 }
 async function account(username) {
@@ -46,7 +46,7 @@ try {
   const questions=await (await fetch(base+`/api/attempts/${attempt.data.id}`,{headers:{cookie:student.cookie}})).json();
   assert.ok(questions.questions.every(q=>!('answer' in q)&&!('explanation' in q)));
   for(const q of questions.questions){const r=await fetch(base+`/api/attempts/${attempt.data.id}`,{method:'PATCH',headers:{cookie:student.cookie,origin:base,'Content-Type':'application/json'},body:JSON.stringify({questionId:q.id,choice:0})});assert.equal(r.status,200);}
-  assert.equal((await post(`/api/attempts/${attempt.data.id}`,{},student.cookie)).data.status,'finished');
+  assert.equal((await post(`/api/attempts/${attempt.data.id}`,{sectionIndex:0},student.cookie)).data.status,'finished');
   const experiment=await post('/api/platform',{action:'createExperiment',name:'HTTP experiment',hypothesis:'Benefit wording increases completion',control:'Practice today',treatment:'Learn your mistakes',baseline:.2,mde:.1,minDays:7},admin.cookie);assert.equal(experiment.status,200);
   assert.equal((await post('/api/platform',{action:'transitionExperiment',id:experiment.data.id,transition:'start'},admin.cookie)).status,200);
   const html=await (await fetch(base+'/dashboard',{headers:{cookie:student.cookie}})).text();assert.ok(html.includes('Halo,')&&html.includes('smoke_student'));
@@ -72,10 +72,10 @@ try {
   assert.equal((await fetch(base+`/api/assessments/${session.data.id}`,{headers:{cookie:outsider.cookie}})).status,404);
   assert.equal((await post(`/api/assessments/${session.data.id}`,{action:'view',questionId:bankItem.data.id,visible:true},student.cookie)).status,200);
   assert.equal((await post(`/api/assessments/${session.data.id}`,{action:'answer',questionId:bankItem.data.id,choice:4},student.cookie)).status,200);
-  const completed=await post(`/api/assessments/${session.data.id}`,{action:'advance'},student.cookie);assert.equal(completed.data.result.correct,1);
+  const completed=await post(`/api/assessments/${session.data.id}`,{action:'advance',sectionIndex:0},student.cookie);assert.equal(completed.data.result.correct,1);
   const publicPack=await post('/api/learning',{action:'createPackage',examId:'casn-tiu',title:'Paket numerik publik',revisionIds:[bankItem.data.id],durations:{numerik:0},visibility:'public'},admin.cookie);assert.equal(publicPack.status,200);
   assert.equal((await post('/api/learning',{action:'transitionPackage',id:publicPack.data.id,transition:'publish'},admin.cookie)).status,200);
-  const personal=await post('/api/assessments',{packageId:publicPack.data.id},outsider.cookie);assert.equal(personal.status,201);await post(`/api/assessments/${personal.data.id}`,{action:'advance'},outsider.cookie);
+  const personal=await post('/api/assessments',{packageId:publicPack.data.id},outsider.cookie);assert.equal(personal.status,201);await post(`/api/assessments/${personal.data.id}`,{action:'advance',sectionIndex:0},outsider.cookie);
   // Existing package access: role gates, catalog visibility, stale state, and running sessions.
   const accessPayload={action:'setPackageVisibility',id:publicPack.data.id,visibility:'private',expectedVisibility:'public',expectedState:'published'};
   assert.equal((await post('/api/learning',accessPayload)).status,401);
@@ -157,6 +157,85 @@ try {
   assert.equal(connection.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE actor_id=? AND action='questions.export'").get(admin.data.user.id).n,2);
   assert.ok(!(await (await fetch(base+'/manage/questions',{headers:{cookie:teacher.cookie}})).text()).includes('Ekspor audit'));
   assert.ok((await (await fetch(base+'/manage/questions',{headers:{cookie:admin.cookie}})).text()).includes('Ekspor audit'));
-  console.log('HTTP smoke passed: existing MVP, bank/import/export, and admin-only package access with catalog, draft publication, stale-state rejection, and preserved sessions.');
+  // Authentication budgets are independent across trusted clients.
+  const login={action:'login',username:student.data.user.username,password:'local-smoke-password-123'};
+  const attackerIp='192.0.2.20';
+  for(let i=0;i<60;i++) {
+    assert.equal((await post('/api/auth',{...login,password:'incorrect'},'',attackerIp)).status,401);
+  }
+  assert.equal((await post('/api/auth',login,'',attackerIp)).status,429);
+  assert.equal((await post('/api/auth',login,'','192.0.2.30')).status,200);
+
+  const getSession=async path=>(await fetch(base+path,{headers:{cookie:student.cookie}})).json();
+  const answerHeaders={cookie:student.cookie,origin:base,'Content-Type':'application/json'};
+  const answer=(path,questionId,choice)=>fetch(base+path,{method:'PATCH',headers:answerHeaders,body:JSON.stringify({questionId,choice})});
+  function slowAnswer(path,questionId,choice){
+    const encoder=new TextEncoder();
+    let upload;
+    const body=new ReadableStream({start(controller){upload=controller;upload.enqueue(encoder.encode('{"questionId":'));}});
+    const response=fetch(base+path,{method:'PATCH',headers:answerHeaders,body,duplex:'half'});
+    return {response,finish(){upload.enqueue(encoder.encode(JSON.stringify(questionId)+',"choice":'+choice+'}'));upload.close();}};
+  }
+  const practice=await post('/api/attempts',{mode:'practice',section:'structure'},student.cookie);
+  const practicePath='/api/attempts/'+practice.data.id,practiceData=await getSession(practicePath);
+  const [firstAnswer,secondAnswer]=practiceData.questions;
+  const inFlight=slowAnswer(practicePath,firstAnswer.id,1);
+  await delay(300);
+  assert.equal((await answer(practicePath,secondAnswer.id,2)).status,200);
+  inFlight.finish();
+  assert.equal((await inFlight.response).status,200);
+  assert.deepEqual((await getSession(practicePath)).answers,{[firstAnswer.id]:1,[secondAnswer.id]:2});
+
+  const full=await post('/api/attempts',{mode:'full'},student.cookie);
+  const fullPath='/api/attempts/'+full.data.id,fullData=await getSession(fullPath);
+  assert.equal(fullData.questions.length,50);
+  assert.ok(fullData.questions.every(q=>q.section==='listening'&&!('answer' in q)));
+  const late=slowAnswer(fullPath,fullData.questions[0].id,0);
+  await delay(300);
+  connection.prepare('UPDATE attempts SET deadline=? WHERE id=?').run(Date.now()-100,full.data.id);
+  const rollover=await post(fullPath,{sectionIndex:0},student.cookie);
+  assert.equal(rollover.data.sectionIndex,1);
+  assert.equal(rollover.data.questions.length,40);
+  late.finish();
+  assert.equal((await late.response).status,409);
+  assert.deepEqual(JSON.parse(connection.prepare('SELECT answers FROM attempts WHERE id=?').get(full.data.id).answers),{});
+  assert.equal((await post(fullPath,{sectionIndex:0},student.cookie)).data.sectionIndex,1);
+  assert.equal((await post(fullPath,{sectionIndex:1},student.cookie)).data.sectionIndex,2);
+
+  // Active assignments remain resumable after their start deadline.
+  const legacyOpen=await post('/api/platform',{action:'createAssignment',classroomId:classroom.data.id,title:'Deadline legacy task',section:'reading'},teacher.cookie);
+  const packageOpen=await post('/api/learning',{action:'createAssessmentTask',classroomId:classroom.data.id,packageId:pack.data.id,title:'Deadline package task'},teacher.cookie);
+  const [legacyStarted,packageStarted]=await Promise.all([
+    post('/api/attempts',{assignmentId:legacyOpen.data.id},student.cookie),
+    post('/api/assessments',{taskId:packageOpen.data.id},student.cookie),
+  ]);
+  assert.equal(legacyStarted.status,201);
+  assert.equal(packageStarted.status,201);
+  connection.prepare('UPDATE assignments SET due_at=1 WHERE id=?').run(legacyOpen.data.id);
+  connection.prepare('UPDATE assessment_tasks SET due_at=1 WHERE id=?').run(packageOpen.data.id);
+  assert.equal((await post('/api/attempts',{assignmentId:legacyOpen.data.id},student.cookie)).data.id,legacyStarted.data.id);
+  for(const page of ['/dashboard','/catalog']){
+    const markup=(await (await fetch(base+page,{headers:{cookie:student.cookie}})).text()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'');
+    assert.match(markup,/<h3>Deadline legacy task<\/h3>/);
+    assert.match(markup,/<h3>Deadline package task<\/h3>/);
+  }
+
+  assert.equal((await post('/api/attempts',{assignmentId:{invalid:true}},student.cookie)).status,400);
+  const repeated=await fetch(base+`/manage/analytics?package=${pack.data.id}&package=other`,{headers:{cookie:teacher.cookie}});
+  assert.equal(repeated.status,200);
+  assert.match(await repeated.text(),new RegExp('/api/learning/export\\?package='+pack.data.id));
+
+  assert.equal((await post('/api/learning',{...authored,kind:'audio',stimulus:'Speaker:'},admin.cookie)).status,400);
+  const source=connection.prepare('SELECT question_id FROM question_revisions WHERE id=?').get(bankItem.data.id);
+  const newer=await post('/api/learning',{...authored,questionId:source.question_id,expectedRevision:1,prompt:'New draft for revision history'},admin.cookie);
+  assert.equal(newer.status,200);
+  const revisionPage=await (await fetch(base+'/manage/questions',{headers:{cookie:admin.cookie}})).text();
+  assert.ok(revisionPage.includes(bankItem.data.id)&&revisionPage.includes(newer.data.id));
+  assert.equal((await post('/api/learning',{action:'transitionQuestions',ids:[bankItem.data.id],transition:'retire'},admin.cookie)).status,200);
+  assert.ok(!(await catalogCards()).includes('Paket numerik publik'));
+  assert.equal((await post('/api/assessments',{packageId:publicPack.data.id},student.cookie)).status,409);
+  assert.equal((await getSession('/api/assessments/'+packageStarted.data.id)).status,'active');
+  console.log('HTTP smoke passed: MVP flows, answer concurrency, deadlines, class resume, authorization, catalog, and bank regressions.');
+
 } catch(error) {console.error(logs);throw error;}
 finally {connection?.close();server.kill('SIGTERM');await new Promise(r=>server.exitCode!==null?r():server.once('exit',r));rmSync(directory,{recursive:true,force:true});}

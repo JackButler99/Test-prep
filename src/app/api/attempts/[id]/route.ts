@@ -16,21 +16,21 @@ export async function PATCH(request: Request, context: Context) {
   try {
     checkOrigin(request);
     const user = await requireUser();
-    const row = loadAttempt((await context.params).id, user.id);
-    if (!row) return error("Sesi tidak ditemukan.", 404);
-    const body = await readBody(request) as { questionId?: string; choice?: number | null };
+    const body = await readBody(request);
     if (typeof body.questionId !== "string" || (body.choice !== null && typeof body.choice !== "number")) return error("Jawaban tidak valid.");
-    saveAnswer(row, body.questionId, body.choice ?? null);
-    return NextResponse.json({ ok: true, deadline: row.deadline });
+    const saved = saveAnswer((await context.params).id, user.id, body.questionId, body.choice);
+    return NextResponse.json({ ok: true, ...saved });
   } catch (cause) { return respondError(cause); }
 }
 export async function POST(request: Request, context: Context) {
   try {
     checkOrigin(request);
     const user = await requireUser();
-    const row = loadAttempt((await context.params).id, user.id);
-    if (!row) return error("Sesi tidak ditemukan.", 404);
-    advanceAttempt(row);
-    return NextResponse.json(serializeAttempt(row));
+    const { sectionIndex } = await readBody(request);
+    if (typeof sectionIndex !== "number" || !Number.isInteger(sectionIndex) || sectionIndex < 0 || sectionIndex > 2) {
+      return error("Bagian sesi tidak valid.");
+    }
+    const row = advanceAttempt((await context.params).id, user.id, sectionIndex);
+    return NextResponse.json(serializeAttempt(row), { headers: { "Cache-Control": "no-store" } });
   } catch (cause) { return respondError(cause); }
 }
