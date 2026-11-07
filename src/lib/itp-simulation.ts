@@ -54,5 +54,5 @@ export function readItpAudio(clip: ItpAudioClip) {
     const audio = readFileSync(path);
     if (audio.length && createHash("sha256").update(audio).digest("hex") === clip.sha256) return audio;
   } catch { /* A missing or damaged clip leaves the listening position unchanged. */ }
-  throw new HttpError("Klip Listening tidak tersedia. Hubungi pengelola kelas.", 503);
+  throw new HttpError("Klip Listening tidak tersedia. Hubungi pengelola.", 503);
 }

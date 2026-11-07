@@ -238,7 +238,12 @@ export function setPackageVisibility(user:User,input:Record<string,unknown>) {
     if(pack.state==="archived")throw new HttpError("Akses paket arsip tidak dapat diubah.",409);
     if(pack.state!==input.expectedState||pack.visibility!==input.expectedVisibility)throw new HttpError("Paket telah berubah. Muat ulang halaman sebelum mengubah akses.",409);
     if(pack.visibility===visibility)return;
-    if(visibility==="public")assertPublicPackageSources(JSON.parse(pack.snapshot_json));
+    if(visibility==="public") {
+      if (db().prepare("SELECT 1 FROM practice_product_packages WHERE package_id=?").get(id)) {
+        throw new HttpError("Akses materi ini ditentukan oleh produk.", 409);
+      }
+      assertPublicPackageSources(JSON.parse(pack.snapshot_json));
+    }
     db().prepare("UPDATE assessment_packages SET visibility=? WHERE id=?").run(visibility,id);
     audit(user.id,"package.visibility."+visibility,id);
   });
@@ -253,7 +258,15 @@ export function transitionPackage(user:User,id:string,action:string) {
       if(pack.visibility==="public")assertPublicPackageSources(pack.snapshot);
       else for(const q of pack.snapshot.questions){const row=db().prepare("SELECT state FROM question_revisions WHERE id=?").get(q.id) as {state:string}|undefined;if(row?.state!=="published")throw new HttpError("Ada revisi yang tidak lagi terbit. Susun paket baru.",409);}
       db().prepare("UPDATE assessment_packages SET state='published' WHERE id=?").run(id);
-    } else if(action==="archive"&&pack.state==="published")db().prepare("UPDATE assessment_packages SET state='archived' WHERE id=?").run(id);
+    } else if(action==="archive"&&pack.state==="published"){
+      const product = db().prepare(`SELECT p.state, EXISTS(
+        SELECT 1 FROM practice_product_access g WHERE g.product_id=p.id
+      ) AS has_access FROM practice_product_packages m
+        JOIN practice_products p ON p.id=m.product_id WHERE m.package_id=?`).get(id);
+      if (product?.has_access) throw new HttpError("Materi masih bisa digunakan oleh peserta yang memiliki akses produk.", 409);
+      if (product && product.state !== "archived") throw new HttpError("Arsipkan produk atau buang draf produknya sebelum mengarsipkan materi ini.", 409);
+      db().prepare("UPDATE assessment_packages SET state='archived' WHERE id=?").run(id);
+    }
     else throw new HttpError("Transisi paket tidak valid.",409);
     audit(user.id,"package."+action,id);
   });

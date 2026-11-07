@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { migrateLearning } from "./learning-schema";
+import { migrateStore } from "./store-schema";
 
 /** Additive migration: existing accounts and attempts remain valid. */
 export function migratePlatform(connection: DatabaseSync) {
@@ -57,6 +58,7 @@ export function migratePlatform(connection: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS experiments_users ON experiment_assignments(user_id,exposed_at);
   `);
   migrateLearning(connection);
+  migrateStore(connection);
   connection.exec("COMMIT");
   } catch (cause) {
     connection.exec("ROLLBACK");

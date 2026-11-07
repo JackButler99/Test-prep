@@ -1,4 +1,5 @@
 import "server-only";
+import { canStartProductPackage } from "./store-access";
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "./db";
 import { assertRole } from "./access";
@@ -59,7 +60,7 @@ export function startAssessment(user:User,input:{packageId?:string;taskId?:strin
       packageId=task.package_id;
     }
     const pack=db().prepare("SELECT * FROM assessment_packages WHERE id=? AND state='published'").get(packageId??"") as {snapshot_json:string;visibility:string;id:string;exam_id:string}|undefined;
-    if(!pack||(!input.taskId&&pack.visibility!=="public"))throw new HttpError("Paket tidak tersedia.",404);
+    if(!pack||(!input.taskId&&!canStartProductPackage(user.id,pack.id,pack.visibility)))throw new HttpError("Paket tidak tersedia untuk akunmu.",404);
     const profile=db().prepare("SELECT active FROM exam_profiles WHERE id=?").get(pack.exam_id) as {active:number}|undefined;
     if(!profile?.active)throw new HttpError("Ujian sedang dinonaktifkan.",409);
     const snapshot=JSON.parse(pack.snapshot_json) as PackageSnapshot;

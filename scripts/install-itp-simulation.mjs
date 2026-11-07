@@ -46,7 +46,7 @@ function resolveQuestions(user, plan, newReading) {
 let connection;
 try {
   const { positionals, values } = parseArgs({ options: { apply: { type: "boolean" }, reading: { type: "string" } }, allowPositionals: true });
-  if (positionals.length !== 2) throw Error("Penggunaan: node --conditions=react-server --import=tsx scripts/install-itp-simulation.mjs INSTRUKTUR MANIFEST.JSON [--reading BACAAN.JSON] [--apply]");
+  if (positionals.length !== 2) throw Error("Penggunaan: node --conditions=react-server --import=tsx scripts/install-itp-simulation.mjs ADMIN MANIFEST.JSON [--reading BACAAN.JSON] [--apply]");
   const [username, manifest] = positionals;
   const plan = json(manifest);
   if (plan.format !== "learn-toefl.itp-simulation" || plan.schemaVersion !== 1 || typeof plan.title !== "string"
@@ -59,8 +59,8 @@ try {
   const title = newReading ? `${plan.title} — Reading baru` : plan.title;
 
   connection = db();
-  const user = connection.prepare("SELECT id, username, role FROM users WHERE username=? AND role='instructor'").get(username.trim().toLowerCase());
-  if (!user) throw Error("Pakai username instruktur pemilik kelas pilot.");
+  const user = connection.prepare("SELECT id, username, role FROM users WHERE username=? AND role='admin'").get(username.trim().toLowerCase());
+  if (!user) throw Error("Pakai username admin pengelola materi.");
   ensureLearningSeed();
 
   function inspect() {
@@ -76,7 +76,7 @@ try {
       questions: rows.map(row => ({ ...row.content, section: row.section })),
     };
     if (!validItpSnapshot(snapshot)) throw Error("Materi paket tidak sesuai format simulasi Level 1.");
-    const matches = listPackages(user).filter(pack => pack.ownerId === user.id && pack.title === title);
+    const matches = listPackages(user).filter(pack => pack.title === title);
     const existing = matches[0];
     if (matches.length > 1 || existing && (!isDeepStrictEqual(existing.snapshot.questions.map(q => q.id), ids)
       || !isDeepStrictEqual(existing.snapshot.itpSimulation, itpSimulation))) throw Error("Judul sudah dipakai paket dengan isi berbeda.");
@@ -104,7 +104,7 @@ try {
       connection.prepare("UPDATE assessment_packages SET snapshot_json=? WHERE id=?").run(JSON.stringify(snapshot), id);
       return id;
     });
-    console.log(`Paket privat tersedia: ${id}. Periksa dan terbitkan melalui akun instruktur sebelum membagikan tugas kelas.`);
+    console.log(`Materi tersedia: ${id}. Buka Materi latihan sebagai admin untuk memeriksa status dan aksesnya.`);
   }
 } catch (error) {
   console.error(`Pemasangan gagal: ${error.message}`);

@@ -45,10 +45,10 @@ Run on a persistent **Node.js server** with a writable `DATA_DIR`. Do not deploy
 - `src/app/api`: HTTP endpoints.
 - `src/components`: interactive dashboard, exam, and review.
 
-## Kelola kelas dan materi
+## Kelola materi dan produk
 
 1. Daftar akun lokal, lalu jalankan `npm run admin:grant -- USERNAME admin` dari folder proyek dengan `DATA_DIR` yang sama seperti server. Jika server memuat `DATA_DIR` dari `.env.local`, ekspor nilai yang sama di terminal sebelum menjalankan perintah.
 2. Buka Bank Soal untuk membuat soal atau mengimpor [contoh JSON](examples/questions-import.json). Naskah wajib untuk soal audio. Ajukan draf ke Review, lalu terbitkan dengan catatan pemeriksaan sebagai admin.
-3. Buka Paket & Penugasan untuk menyusun paket dari revisi terbit. Admin dapat membuka akses publik untuk paket yang memenuhi syarat. Instruktur dapat membagikan paket terbit ke kelas yang dimilikinya.
-4. Peserta bergabung dengan kode kelas di dashboard. Tenggat membatasi waktu mulai pertama. Buka katalog untuk melihat tugas dan riwayat. Instruktur dapat melihat hasil kelasnya dan mengekspor CSV dari halaman Analitik.
-5. Admin dapat mengekspor revisi terbaru per soal untuk audit dari Bank Soal dan mengelola eksperimen prompt latihan dari halaman Eksperimen.
+3. Buka **Materi latihan** untuk menyusun dan menerbitkan materi dari revisi terbit. Gunakan akses **Privat** untuk materi yang akan masuk produk. Untuk memasang simulasi ITP dari manifest, gunakan username admin saat menjalankan `scripts/install-itp-simulation.mjs`.
+4. Buka **Produk & akses** untuk menerbitkan diagnostik gratis atau bundel persiapan. Diagnostik memerlukan 5 soal Listening, 5 Structure, dan 5 Reading. Gunakan **Aktifkan akses uji** untuk membuka bundel berbayar bagi akun peserta.
+5. Peserta membuka katalog di `/paket` dan menemukan produk aktif di **Paket Saya**. Sesi lama tersedia di riwayat pemiliknya. Admin dapat memeriksa laporan soal di **Produk & akses**, mengekspor hasil di **Analitik soal**, dan mengelola eksperimen dari halaman **Eksperimen**.

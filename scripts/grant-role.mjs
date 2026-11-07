@@ -3,8 +3,8 @@ import { db } from '../src/lib/db.ts';
 import { randomUUID } from 'node:crypto';
 
 const [username, role] = process.argv.slice(2);
-if (!username || !['admin', 'instructor', 'student'].includes(role)) {
-  console.error('Usage: npm run admin:grant -- USERNAME admin|instructor|student');
+if (!username || !['admin', 'student'].includes(role)) {
+  console.error('Usage: npm run admin:grant -- USERNAME admin|student');
   process.exit(1);
 }
 const connection=db();

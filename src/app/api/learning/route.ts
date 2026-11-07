@@ -5,13 +5,14 @@ import { checkLearningRequest,checkJsonDepth } from "@/lib/learning-security";
 import { assertImportEnvelope } from "@/lib/question-input";
 import { audit } from "@/lib/experiments";
 import { saveQuestion,importQuestions,transitionQuestions,saveExamProfile,createPackage,transitionPackage,setPackageVisibility } from "@/lib/learning-bank";
-import { createAssessmentTask } from "@/lib/assessments";
+import { createProduct, changeProductState, discardDraftProduct, grantProductAccess } from "@/lib/products";
+import { resolveQuestionIssue } from "@/lib/question-issues";
 
 export const runtime="nodejs";
 export async function POST(request:Request) {
   let actor:string|undefined, importing=false;
   try {
-    checkLearningRequest(request);const user=await requireUser();assertRole(user,"admin","instructor");actor=user.id;rateLimit("learning:"+user.id,90,60_000);
+    checkLearningRequest(request);const user=await requireUser();assertRole(user,"admin");actor=user.id;rateLimit("learning:"+user.id,90,60_000);
     const body=await readBody(request,512_000,{timeoutMs:10_000,strictUtf8:true,beforeParse:checkJsonDepth});let id:string|undefined,count:number|undefined;
     switch(body.action){
       case "saveQuestion": id=saveQuestion(user,body);break;
@@ -21,7 +22,13 @@ export async function POST(request:Request) {
       case "createPackage": id=createPackage(user,body);break;
       case "transitionPackage": transitionPackage(user,String(body.id),String(body.transition));break;
       case "setPackageVisibility": setPackageVisibility(user,body);break;
-      case "createAssessmentTask": id=createAssessmentTask(user,body);break;
+      case "createAssessmentTask": throw new HttpError("Tugas kelas sudah dihentikan.", 410);
+      case "createProduct": id=createProduct(user,body);break;
+      case "publishProduct": changeProductState(user,body.id,"publish");break;
+      case "archiveProduct": changeProductState(user,body.id,"archive");break;
+      case "discardDraftProduct": discardDraftProduct(user,body.id);break;
+      case "grantProductAccess": grantProductAccess(user,body.id,body.username);break;
+      case "resolveQuestionIssue": resolveQuestionIssue(user,body.id);break;
       default:throw new HttpError("Aksi tidak dikenal.",400);
     }
     return NextResponse.json({ok:true,id,count},{headers:{"Cache-Control":"no-store"}});

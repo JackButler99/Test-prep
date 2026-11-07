@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
-export function AuthForm() {
+export function AuthForm({ returnTo = "/" }: { returnTo?: string }) {
   const router = useRouter();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [error, setError] = useState("");
@@ -16,7 +16,7 @@ export function AuthForm() {
         body: JSON.stringify({ action: mode, username: form.get("username"), password: form.get("password") }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Tidak dapat masuk.");
-      router.replace("/");
+      router.replace(returnTo);
       router.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Tidak dapat masuk."); setBusy(false); }
   }
@@ -24,7 +24,7 @@ export function AuthForm() {
     <Link href="/tentang" className="back-link">Tentang Practice Lab <span aria-hidden="true">↗</span></Link>
     <span className="eyebrow">AKUN BELAJAR</span>
     <h2>{mode === "register" ? "Buat akun baru" : "Masuk ke akunmu"}</h2>
-    <p>{mode === "register" ? "Buat akun untuk menyimpan progres dan melihat pembahasan." : "Buka beranda untuk melanjutkan latihan atau mengelola kelas."}</p>
+    <p>{mode === "register" ? "Buat akun untuk menyimpan progres dan melihat pembahasan." : "Masuk untuk membuka paket dan melanjutkan latihan."}</p>
     <div className="segmented" role="group" aria-label="Pilihan akun">
       <button type="button" aria-pressed={mode === "login"} className={mode === "login" ? "selected" : ""} onClick={() => { setMode("login"); setError(""); }}>Masuk</button>
       <button type="button" aria-pressed={mode === "register"} className={mode === "register" ? "selected" : ""} onClick={() => { setMode("register"); setError(""); }}>Daftar</button>
