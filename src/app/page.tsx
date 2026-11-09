@@ -4,7 +4,7 @@ import { dashboardUser } from "@/lib/access";
 import { recentAttempts } from "@/lib/attempts";
 import { assessmentHistory } from "@/lib/assessments";
 import { getPrompt } from "@/lib/experiments";
-import { ownedProducts, publishedProducts } from "@/lib/products";
+import { availableDiagnostic, ownedProducts } from "@/lib/products";
 import { PlatformShell } from "@/components/platform-shell";
 import { Disclosure } from "@/components/disclosure";
 import { DashboardActions } from "@/components/dashboard-actions";
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 export default async function Dashboard() {
   const user = await dashboardUser("student", "admin");
-  const diagnostic = publishedProducts().find(product => product.kind === "diagnostic");
+  const diagnostic = availableDiagnostic();
   const owned = ownedProducts(user.id);
   const legacy = recentAttempts(user.id).map(session => ({
     ...session, title: session.mode === "full" ? "Simulasi TOEFL ITP" : `Latihan ${session.section}`,

@@ -22,10 +22,18 @@ export default async function CatalogPage() {
       {products.length ? <div className="metric-grid">{products.map(product => <ProductCard product={product} key={product.id} />)}</div>
         : <div className="workspace-card empty-state"><p>Paket persiapan sedang disiapkan.</p></div>}
     </section>
-    {open.length > 0 && <section className="workspace-section" aria-labelledby="open-practice">
-      <h2 id="open-practice">Latihan gratis</h2>
-      <div className="metric-grid">{open.map(material => <MaterialCard key={material.id} material={material} user={user} signInHref="/login?next=/paket" />)}</div>
-    </section>}
+    <section className="workspace-section" id="open-practice" aria-labelledby="open-practice-title">
+      <h2 id="open-practice-title">Latihan gratis</h2>
+      <div className="metric-grid">
+        {user?.role !== "admin" && <article className="workspace-card">
+          <h3>Latihan singkat TOEFL ITP</h3>
+          <p>Pilih Listening, Structure, atau Reading dari dashboard.</p>
+          <Link className="button ghost" href={user ? "/#quick-practice" : "/login?next=%2F%23quick-practice"}>{user ? "Buka latihan singkat" : "Masuk untuk mulai"}</Link>
+        </article>}
+        {open.map(material => <MaterialCard key={material.id} material={material} user={user} signInHref="/login?next=/paket" />)}
+      </div>
+      {user?.role === "admin" && !open.length && <p className="muted">Belum ada materi tambahan dengan akses Publik.</p>}
+    </section>
     {user && <section className="workspace-section" id="history">
       <h2>Riwayat paket</h2>
       {history.length ? <div className="workspace-card activity-card">{history.map(session => <Link className="activity-line" href={`/assessment/${session.id}`} key={session.id}>

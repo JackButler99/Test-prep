@@ -52,7 +52,9 @@ export default async function ProductsPage() {
     <section className="workspace-section" id="laporan-soal">
       <div className="section-title"><h2>Laporan soal</h2><Link href="/manage/questions">Buka Bank Soal →</Link></div>
       {issues.map(issue => <article className="workspace-card package-list-card" key={issue.id}>
-        <p className="muted">Revisi <code>{issue.revision_id}</code> · {new Date(issue.created_at).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" })}</p>
+        <h3>{issue.prompt}</h3>
+        <p className="muted">{issue.section_key} · v{issue.revision} · {new Date(issue.created_at).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta" })}</p>
+        <p className="muted">ID revisi <code>{issue.revision_id}</code></p>
         <p className="preserve-text">{issue.note}</p>
         <LearningForm action="resolveQuestionIssue" values={{ id: issue.id }} button="Tandai sudah ditinjau" />
       </article>)}

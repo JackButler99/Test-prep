@@ -7,12 +7,12 @@ import { SKD_EXAM_ID } from "@/lib/skd-format";
 import { PlatformShell } from "./platform-shell";
 import { AssessmentStart } from "./learning-controls";
 
-export function ProductShell({ user, active, children }: { user: User | null; active: string; children: ReactNode }) {
+export function ProductShell({ user, active, children, signInHref = "/login?next=/paket" }: { user: User | null; active: string; children: ReactNode; signInHref?: string }) {
   if (user) return <PlatformShell user={user} active={active}>{children}</PlatformShell>;
   return <main className="shell">
     <header className="topbar">
       <Link href="/paket" className="brand"><span className="brand-mark" aria-hidden="true">I.</span> ITP Practice Lab</Link>
-      <Link className="nav-link" href="/login">Masuk</Link>
+      <Link className="nav-link" href={signInHref}>Masuk</Link>
     </header>
     {children}
   </main>;

@@ -27,8 +27,12 @@ export function reportQuestion(user: User, input: Record<string, unknown>) {
 
 export function openQuestionIssues(user: User) {
   assertRole(user, "admin");
-  return db().prepare(`SELECT id, revision_id, note, created_at FROM question_issue_reports
-    WHERE resolved_at IS NULL ORDER BY created_at DESC LIMIT 100`).all() as { id: string; revision_id: string; note: string; created_at: number }[];
+  return db().prepare(`SELECT i.id, i.revision_id, i.note, i.created_at, r.revision, r.section_key,
+    json_extract(r.content_json,'$.prompt') AS prompt FROM question_issue_reports i
+    JOIN question_revisions r ON r.id=i.revision_id
+    WHERE i.resolved_at IS NULL ORDER BY i.created_at, i.id LIMIT 100`).all() as {
+      id: string; revision_id: string; note: string; created_at: number; revision: number; section_key: string; prompt: string;
+    }[];
 }
 
 export function resolveQuestionIssue(user: User, id: unknown) {

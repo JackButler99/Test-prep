@@ -71,11 +71,21 @@ function diagnosticMaterial(snapshot: PackageSnapshot) {
     ["listening", "structure", "reading"].every(key => snapshot.questions.filter(question => question.section === key).length === 5);
 }
 
+export function availableDiagnostic() {
+  return publishedProducts().find(product => product.kind === "diagnostic" && materials(product.id).some(row => {
+    const snapshot = readMaterialSnapshot(row);
+    return ready(row, snapshot) && diagnosticMaterial(snapshot);
+  }));
+}
+
 function materialCard(row: MaterialRow, userId?: string) {
   const snapshot = readMaterialSnapshot(row);
   const available = ready(row, snapshot);
   return { id: row.id, title: row.title, examId: snapshot?.examId, count: snapshot?.questions.length ?? 0,
-    sections: snapshot?.sections ?? [], skills: [...new Set(snapshot?.questions.map(question => question.skill))], available,
+    sections: snapshot?.sections.map(section => ({
+      ...section,
+      skills: [...new Set(snapshot.questions.filter(question => question.section === section.key).map(question => question.skill))],
+    })) ?? [], available,
     canStart: !!userId && available && canStartProductPackage(userId, row.id, row.visibility) };
 }
 

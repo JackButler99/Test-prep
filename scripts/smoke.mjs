@@ -117,11 +117,18 @@ try {
   const productPath='/paket/numerik-premium';
   assert.equal((await fetch(base+productPath)).status,404);
   assert.equal((await post('/api/learning',{action:'publishProduct',id:product.data.id},admin.cookie)).status,200);
-  assert.match(await (await fetch(base+productPath)).text(),/Pembelian belum dibuka/);
+  const productMarkup=await (await fetch(base+productPath)).text();
+  assert.match(productMarkup,/Pembelian belum dibuka/);
+  assert.match(productMarkup,/href="\/login\?next=\/paket\/numerik-premium"/);
+  assert.match(productMarkup,/href="\/paket#open-practice"/);
+  assert.equal((await post('/api/learning',{action:'transitionPackage',id:pack.data.id,transition:'archive'},admin.cookie)).status,409);
   assert.equal((await post('/api/assessments',{packageId:pack.data.id},student.cookie)).status,404);
   assert.equal((await post('/api/assessments',{packageId:pack.data.id},outsider.cookie)).status,404);
   const grant={action:'grantProductAccess',id:product.data.id,username:student.data.user.username};
   assert.equal((await post('/api/learning',grant,student.cookie)).status,403);
+  connection.prepare("UPDATE exam_profiles SET active=0 WHERE id='casn-tiu'").run();
+  assert.equal((await post('/api/learning',grant,admin.cookie)).status,409);
+  connection.prepare("UPDATE exam_profiles SET active=1 WHERE id='casn-tiu'").run();
   assert.equal((await post('/api/learning',grant,admin.cookie)).status,200);
   assert.equal((await post('/api/learning',grant,admin.cookie)).status,200);
   assert.equal(connection.prepare('SELECT COUNT(*) AS n FROM practice_product_access WHERE product_id=?').get(product.data.id).n,1);
@@ -138,6 +145,8 @@ try {
   assert.equal((await post('/api/question-issues',questionReport,outsider.cookie)).status,404);
   assert.equal((await post('/api/question-issues',questionReport,student.cookie)).status,201);
   assert.equal((await post('/api/question-issues',questionReport,student.cookie)).status,409);
+  const issuePage=await (await fetch(base+'/manage/products',{headers:{cookie:admin.cookie}})).text();
+  assert.match(issuePage,/Berapa 2 \+ 3\?/);
   const publicPack=await post('/api/learning',{action:'createPackage',examId:'casn-tiu',title:'Paket numerik publik',revisionIds:[bankItem.data.id],durations:{numerik:0},visibility:'public'},admin.cookie);assert.equal(publicPack.status,200);
   assert.equal((await post('/api/learning',{action:'transitionPackage',id:publicPack.data.id,transition:'publish'},admin.cookie)).status,200);
   const personal=await post('/api/assessments',{packageId:publicPack.data.id},outsider.cookie);assert.equal(personal.status,201);await post(`/api/assessments/${personal.data.id}`,{action:'advance',sectionIndex:0},outsider.cookie);
@@ -281,6 +290,7 @@ try {
   assert.match(await repeated.text(),new RegExp('/api/learning/export\\?package='+pack.data.id));
   assert.equal((await post('/api/learning',{action:'archiveProduct',id:product.data.id},admin.cookie)).status,200);
   assert.equal((await fetch(base+productPath)).status,404);
+  assert.equal((await post('/api/learning',{action:'transitionPackage',id:pack.data.id,transition:'archive'},admin.cookie)).status,409);
   const packageStarted=await post('/api/assessments',{packageId:pack.data.id},student.cookie);
   assert.equal(packageStarted.status,201);
   assert.equal((await post('/api/assessments',{packageId:pack.data.id},outsider.cookie)).status,404);
@@ -306,6 +316,12 @@ try {
   const diagnostic=await post('/api/learning',{action:'createProduct',slug:'cek-kesiapan',title:'Cek Kesiapan',description:'Diagnostik TOEFL singkat.',kind:'diagnostic',access:'free',packageIds:[diagnosticMaterial.data.id]},admin.cookie);
   assert.equal(diagnostic.status,200);
   assert.equal((await post('/api/learning',{action:'publishProduct',id:diagnostic.data.id},admin.cookie)).status,200);
+  const diagnosticRoot=await (await fetch(base+'/',{headers:{cookie:outsider.cookie}})).text();
+  assert.match(diagnosticRoot,/Cek kesiapan gratis/);
+  connection.prepare("UPDATE question_revisions SET state='retired' WHERE id=?").run(revisionIds[0]);
+  const unavailableRoot=await (await fetch(base+'/',{headers:{cookie:outsider.cookie}})).text();
+  assert.doesNotMatch(unavailableRoot,/Cek kesiapan gratis/);
+  connection.prepare("UPDATE question_revisions SET state='published' WHERE id=?").run(revisionIds[0]);
   const diagnosticStart=await post('/api/assessments',{packageId:diagnosticMaterial.data.id},outsider.cookie);
   assert.equal(diagnosticStart.status,201);
   for(const [sectionIndex,section] of sections.entries()){

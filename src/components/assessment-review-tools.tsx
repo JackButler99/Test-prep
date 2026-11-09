@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import type { PublicAssessment } from "@/lib/learning-types";
+import { ReadingPassage } from "./reading-passage";
 
 export function AssessmentReviewTools({ data, allowReport }: { data: PublicAssessment; allowReport: boolean }) {
   const [position, setPosition] = useState(0);
@@ -38,7 +39,9 @@ export function AssessmentReviewTools({ data, allowReport }: { data: PublicAsses
     {current && detail && <details className="workspace-card">
       <summary>Latih ulang {missed.length} soal keliru atau kosong</summary>
       <p className="muted">Soal {position + 1} dari {missed.length} · latihan ulang mandiri</p>
-      {current.stimulus && <p className="preserve-text stimulus-panel">{current.stimulus}</p>}
+      {current.stimulus && (current.section === "reading" && current.kind !== "audio"
+        ? <ReadingPassage text={current.stimulus} prompt={current.prompt} />
+        : <p className="preserve-text stimulus-panel">{current.stimulus}</p>)}
       <h3>{current.prompt}</h3>
       <div className="options">{current.options.map((option, index) => <button type="button" key={index}
         className={`option ${choice === index ? "chosen" : ""}`} aria-pressed={choice === index} onClick={() => setChoice(index)}>

@@ -122,7 +122,12 @@ export function AssessmentClient({ id, renderFollowUp, onFinished, preview }: {
         </div>
         {data.status === "active" && <div className={`assessment-clock${remaining !== null && remaining < 120 ? " is-urgent" : ""}`}
           role={clock === null ? undefined : "timer"} aria-label={clock === null ? undefined : "Waktu tersisa"} aria-live="off">
-          {clock === null ? <span><span className="student-room-bara-status"><StudentRoomBara /><span className="student-room-bara-time">Tanpa timer</span></span></span> : <><span>Sisa waktu</span><strong>{clock}</strong></>}
+          <span className="student-room-bara-status">
+            <StudentRoomBara />
+            <span className="student-room-bara-time">
+              {clock === null ? "Tanpa timer" : <><span>Sisa waktu</span><strong>{clock}</strong></>}
+            </span>
+          </span>
         </div>}
       </div>
     </header>
