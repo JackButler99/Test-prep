@@ -1,0 +1,32 @@
+.skd-figure {
+  display: inline-block;
+  inline-size: 8.5rem;
+  max-inline-size: 100%;
+  block-size: auto;
+  vertical-align: middle;
+}
+
+.bank-answer-list.skd-bank-options {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
+}
+.bank-answer-list.skd-bank-options li {
+  display: grid;
+  gap: .5rem;
+  align-content: start;
+  min-inline-size: 0;
+  padding: .65rem;
+}
+.bank-answer-list.skd-bank-options li > span:nth-child(2) {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+}
+.skd-bank-options .skd-figure { inline-size: 5.5rem; }
+.bank-answer-list.skd-bank-options .bank-answer-score {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: .25rem;
+  margin-left: 0;
+  text-align: left;
+}

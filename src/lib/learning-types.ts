@@ -1,3 +1,5 @@
+import type { SkdMode } from "./skd-format";
+
 export type ExamSection = { key: string; title: string; durationSeconds: number };
 export type ExamProfile = { id: string; title: string; description: string; sections: ExamSection[]; active: boolean };
 export type QuestionContent = {
@@ -7,6 +9,7 @@ export type QuestionContent = {
 export type SnapshotQuestion = QuestionContent & { id: string; questionId: string; revision: number; section: string };
 export type ItpAudioClip = { sha256: string; durationMs: number; part: "A" | "B" | "C" };
 export type PackageSnapshot = { examId: string; examTitle: string; title: string; sections: ExamSection[]; questions: SnapshotQuestion[];
+  skd?: { year: 2024; mode: SkdMode };
   itpSimulation?: { listening: ItpAudioClip[] } };
 export type BankRow = { id: string; questionId: string; revision: number; examId: string; section: string; state: string; visibility: string; ownerId: string | null; reviewNote: string; content: QuestionContent };
 export type LearningPackage = { id: string; ownerId: string; examId: string; title: string; visibility: string; state: string; snapshot: PackageSnapshot };
@@ -15,8 +18,9 @@ export type PublicAssessment = {
   sections: ExamSection[]; sectionIndex: number; deadline: number | null; startedAt: number; finishedAt: number | null;
   answers: Record<string, number>;
   questions: Omit<SnapshotQuestion,"answer"|"explanation"|"scores">[];
+  skd?: PackageSnapshot["skd"];
   itpSimulation?: true;
   listening?: { position: number; total: number; part: ItpAudioClip["part"]; audioUntil: number | null };
   result?: { points: number; maxPoints: number; correct: number; total: number;
-    details: { id: string; selected: number | null; answer: number; explanation: string; points: number; maxPoints: number; observedMs: number }[] };
+    details: { id: string; selected: number | null; answer: number; explanation: string; points: number; maxPoints: number; observedMs: number; optionScores?: number[] }[] };
 };

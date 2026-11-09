@@ -4,14 +4,27 @@ import type { User } from "@/lib/auth";
 import { DashboardActions } from "./dashboard-actions";
 import { WorkspaceNav,type NavGroup } from "./workspace-nav";
 
-export function PlatformShell({user,active,children}:{user:User;active:string;children:ReactNode}) {
-  const groups:NavGroup[]=[{title:"Belajar",links:[{href:"/",label:"Beranda",key:"student"},{href:"/catalog",label:"Paket latihan",key:"catalog"}]}];
-  if(user.role==="instructor")groups.push({title:"Mengajar",links:[{href:"/instructor",label:"Kelas & peserta",key:"instructor"}]});
-  if(["admin","instructor"].includes(user.role))groups.push({title:"Materi & evaluasi",links:[{href:"/manage/questions",label:"Bank soal",key:"bank"},{href:"/manage/packages",label:"Paket & tugas",key:"packages"},{href:"/manage/analytics",label:"Analitik soal",key:"analytics"}]});
+export function PlatformShell({ user, active, children, context }: {
+  user: User;
+  active: string;
+  children: ReactNode;
+  context?: { label: string; backHref: string; backLabel: string };
+}) {
+  const groups: NavGroup[] = [{ title: "Belajar", links: [
+    { href: "/", label: "Beranda", key: "student" },
+    { href: "/paket", label: "Katalog paket", key: "catalog" },
+    { href: "/paket-saya", label: "Paket Saya", key: "my-products" },
+  ] }];
+  if (user.role === "admin") groups.push({ title: "Materi & produk", links: [
+    { href: "/manage/questions", label: "Bank soal", key: "bank" },
+    { href: "/manage/packages", label: "Materi latihan", key: "packages" },
+    { href: "/manage/products", label: "Produk & akses", key: "products" },
+    { href: "/manage/analytics", label: "Analitik soal", key: "analytics" },
+  ] });
   if(user.role==="admin")groups.push({title:"Pengelolaan",links:[{href:"/admin",label:"Ringkasan admin",key:"admin"},{href:"/admin/exams",label:"Format ujian",key:"exams"},{href:"/admin/experiments",label:"Eksperimen A/B",key:"experiments"}]});
-  const current = active === "about"
+  const current = context?.label ?? (active === "about"
     ? "Tentang"
-    : groups.flatMap(group => group.links).find(link => link.key === active)?.label ?? "Ruang belajar";
+    : groups.flatMap(group => group.links).find(link => link.key === active)?.label ?? "Ruang belajar");
   return <div className="platform">
     <a className="skip-link" href="#workspace-content">Lewati navigasi</a>
     <aside className="platform-sidebar">
@@ -22,14 +35,14 @@ export function PlatformShell({user,active,children}:{user:User;active:string;ch
       <WorkspaceNav groups={groups} active={active}/>
       <div className="sidebar-bottom">
         <div className="account-avatar" aria-hidden="true">{user.username.slice(0,2).toUpperCase()}</div>
-        <div><strong>{user.username}</strong><span className="role-label">{user.role === "student" ? "Peserta" : user.role === "instructor" ? "Instruktur" : "Administrator"}</span></div>
+        <div><strong>{user.username}</strong><span className="role-label">{user.role === "admin" ? "Administrator" : "Peserta"}</span></div>
         <DashboardActions logout/>
       </div>
     </aside>
     <main id="workspace-content" tabIndex={-1} className="platform-main">
       <header className="workspace-top">
         <span><span className="breadcrumb-root">Ruang belajar</span><span aria-hidden="true"> / </span><strong>{current}</strong></span>
-        {active !== "student" && <Link href="/">Kembali ke beranda</Link>}
+        {active !== "student" && <Link href={context?.backHref ?? "/"}>{context?.backLabel ?? "Kembali ke beranda"}</Link>}
       </header>
       {children}
       <footer>

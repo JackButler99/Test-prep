@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react";
 import type { AttemptData } from "@/lib/client-types";
 import { ReadingPassage } from "./reading-passage";
 import { UiDialog } from "./ui-dialog";
+import { StudentRoomBara } from "./student-room-bara";
 
 type Questions = AttemptData["questions"];
 type NavigatorProps = {
@@ -69,10 +70,10 @@ export function ExamRoom({ questions, answers, index, onJump, busy, sectionTitle
     <header className="exam-room-header">
       <div className="exam-room-bar">
         <div className="exam-room-brand"><span className="brand-mark" aria-hidden="true">I.</span><span>ITP Practice Lab</span></div>
-        {clock === null ? <span className="exam-room-clock">Tanpa timer</span>
-          : <div className={`exam-room-clock${urgent ? " is-urgent" : ""}`} role="timer" aria-live="off">
+        {clock === null ? <span className="exam-room-clock"><span className="student-room-bara-status"><StudentRoomBara /><span className="student-room-bara-time">Tanpa timer</span></span></span>
+          : <div className={`exam-room-clock${urgent ? " is-urgent" : ""}`} role="timer" aria-live="off"><div className="student-room-bara-status"><StudentRoomBara /><div className="student-room-bara-time">
             <span>Waktu tersisa</span><strong>{clock}</strong>
-          </div>}
+          </div></div></div>}
       </div>
     </header>
 

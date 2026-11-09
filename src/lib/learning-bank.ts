@@ -10,6 +10,7 @@ import { splitSpeechLines } from "./listening-speech";
 import { assertQuestionInput } from "./question-input";
 import { assertDailyImportCapacity, assertQuestionCapacity } from "./import-quota";
 import { itpAudioAvailable } from "./itp-simulation";
+import { SKD_EXAM_ID, SKD_SECONDS, SKD_SECTIONS, SKD_YEAR, validSkdQuestion } from "./skd-format";
 import type { BankRow, ExamProfile, ExamSection, LearningPackage, PackageSnapshot, QuestionContent } from "./learning-types";
 
 export { transaction } from "./db";
@@ -88,9 +89,13 @@ function normalizeQuestion(input:Record<string,unknown>) {
   if(new Set(options).size!==options.length)throw new HttpError("Pilihan jawaban harus berbeda.",400);
   const answer=input.answer;if(typeof answer!=="number"||!Number.isInteger(answer)||answer<0||answer>=options.length)throw new HttpError("Indeks kunci tidak valid (mulai dari 0).",400);
   let scores=input.scores;
-  if(scores===undefined)scores=options.map((_,i)=>i===answer?1:0);
+  if(scores===undefined)scores=options.map((_,i)=>i===answer?(examId===SKD_EXAM_ID?5:1):0);
   if(!Array.isArray(scores)||scores.length!==options.length||scores.some(n=>typeof n!=="number"||!Number.isFinite(n)||n<0||n>10)||Math.max(...scores)<=0||scores[answer]!==Math.max(...scores)||scores.filter(n=>n===scores[answer]).length!==1)throw new HttpError("Bobot 0–10 harus memiliki satu nilai tertinggi pada kunci.",400);
-  return {examId,section,content:{kind,stimulus,prompt,options,answer,explanation,skill,scores} as QuestionContent};
+  const content: QuestionContent = { kind, stimulus, prompt, options, answer, explanation, skill, scores };
+  if (examId === SKD_EXAM_ID && !validSkdQuestion({ ...content, section })) {
+    throw new HttpError("SKD memerlukan lima opsi. Pakai bobot 5/0 untuk TWK dan TIU serta 1–5 untuk TKP. Periksa pola FIG pada soal gambar.", 400);
+  }
+  return {examId,section,content};
 }
 const revisionFloorKey = (questionId: string) => `question-revision-floor:${questionId}`;
 
@@ -115,10 +120,14 @@ function insertQuestion(user:User,input:Record<string,unknown>) {
 export function saveQuestion(user:User,input:Record<string,unknown>) {
   assertRole(user,"admin","instructor");assertQuestionInput(input,true);ensureLearningSeed();return transaction(()=>insertQuestion(user,input));
 }
-export function importQuestions(user:User,items:unknown) {
+export function importQuestions(user:User,items:unknown, receiptKey?: string) {
   assertRole(user,"admin","instructor");ensureLearningSeed();
   if(!Array.isArray(items)||!items.length||items.length>50)throw new HttpError("Impor harus berisi 1–50 soal.",400);
   return transaction(()=>{
+    if (receiptKey) {
+      const receipt = db().prepare("SELECT value FROM learning_meta WHERE key=?").get(receiptKey);
+      if (receipt) return JSON.parse(String(receipt.value)) as string[];
+    }
     assertDailyImportCapacity(user.id,items.length);assertQuestionCapacity(user.id,items.length);
     const ids=items.map((item,index)=>{
       try { assertQuestionInput(item);return insertQuestion(user,item); }
@@ -126,6 +135,7 @@ export function importQuestions(user:User,items:unknown) {
     });
     const eventId=randomUUID();
     db().prepare("INSERT INTO bank_import_events VALUES(?,?,?,?)").run(eventId,user.id,ids.length,Date.now());
+    if (receiptKey) db().prepare("INSERT INTO learning_meta VALUES(?,?)").run(receiptKey, JSON.stringify(ids));
     audit(user.id,"questions.import.success",eventId);
     return ids;
   });
@@ -207,6 +217,19 @@ export function createPackage(user:User,input:Record<string,unknown>) {
   });
   if(questions.some(q=>!sections.some(s=>s.key===q!.section)))throw new HttpError("Bagian soal tidak lagi sesuai profil ujian.",409);
   const snapshot:PackageSnapshot={examId:profile.id,examTitle:profile.title,title,sections,questions:sections.flatMap(s=>questions.filter(q=>q!.section===s.key).map(q=>({...q!.content,id:q!.id,questionId:q!.questionId,revision:q!.revision,section:q!.section})))};
+  if (profile.id === SKD_EXAM_ID) {
+    const full = input.skdMode === "full";
+    if (snapshot.questions.some(question => !validSkdQuestion(question))) throw new HttpError("Ada soal SKD dengan bobot atau gambar yang tidak valid.", 409);
+    if (full && SKD_SECTIONS.some((part, index) => sections[index]?.key !== part.key ||
+      snapshot.questions.filter(question => question.section === part.key).length !== part.count)) {
+      throw new HttpError("Simulasi SKD 2024 memerlukan 30 TWK, 35 TIU, dan 45 TKP.", 400);
+    }
+    if (sections.some(section => section.durationSeconds !== 0)) {
+      throw new HttpError("Durasi tiap bagian SKD harus 0. Simulasi penuh memakai timer gabungan.", 400);
+    }
+    snapshot.skd = { year: SKD_YEAR, mode: full ? "full" : "practice" };
+    sections[0].durationSeconds = full ? SKD_SECONDS : 0;
+  }
   const visibility=user.role==="admin"&&input.visibility==="public"?"public":"private";
   if(visibility==="public"&&questions.some(q=>q!.visibility!=="public"))throw new HttpError("Paket publik tidak boleh membocorkan soal privat instruktur.",400);
   const id=randomUUID();db().prepare("INSERT INTO assessment_packages VALUES(?,?,?,?,?,'draft',?,?)").run(id,user.id,profile.id,title,visibility,JSON.stringify(snapshot),Date.now());audit(user.id,"package.created",id);return id;
@@ -238,7 +261,12 @@ export function setPackageVisibility(user:User,input:Record<string,unknown>) {
     if(pack.state==="archived")throw new HttpError("Akses paket arsip tidak dapat diubah.",409);
     if(pack.state!==input.expectedState||pack.visibility!==input.expectedVisibility)throw new HttpError("Paket telah berubah. Muat ulang halaman sebelum mengubah akses.",409);
     if(pack.visibility===visibility)return;
-    if(visibility==="public")assertPublicPackageSources(JSON.parse(pack.snapshot_json));
+    if(visibility==="public") {
+      if (db().prepare("SELECT 1 FROM practice_product_packages WHERE package_id=?").get(id)) {
+        throw new HttpError("Akses materi ini ditentukan oleh produk.", 409);
+      }
+      assertPublicPackageSources(JSON.parse(pack.snapshot_json));
+    }
     db().prepare("UPDATE assessment_packages SET visibility=? WHERE id=?").run(visibility,id);
     audit(user.id,"package.visibility."+visibility,id);
   });

@@ -1,4 +1,5 @@
 import "server-only";
+import { canStartProductPackage } from "./store-access";
 import { randomUUID } from "node:crypto";
 import { db, transaction } from "./db";
 import { assertRole } from "./access";
@@ -8,9 +9,9 @@ import { audit } from "./experiments";
 import { studentAssignments } from "./classrooms";
 import { SECTION_NAMES } from "./client-types";
 import { listPackages, ensureLearningSeed, packageMaterialsAvailable } from "./learning-bank";
-import { optionOrder } from "./option-order";
+import { assessmentOptionOrder } from "./option-order";
 import { readItpAudio } from "./itp-simulation";
-import type { PackageSnapshot, PublicAssessment, SnapshotQuestion } from "./learning-types";
+import type { PackageSnapshot, PublicAssessment } from "./learning-types";
 
 export type AssessmentRow={id:string;user_id:string;package_id:string;task_id:string|null;status:"active"|"finished";snapshot_json:string;answers_json:string;timing_json:string;section_index:number;deadline:number|null;started_at:number;finished_at:number|null;timing_question_id:string|null;last_tick_at:number|null;option_seed:string|null;listening_index:number;listening_audio_until:number|null};
 export function createAssessmentTask(user:User,input:Record<string,unknown>) {
@@ -59,7 +60,7 @@ export function startAssessment(user:User,input:{packageId?:string;taskId?:strin
       packageId=task.package_id;
     }
     const pack=db().prepare("SELECT * FROM assessment_packages WHERE id=? AND state='published'").get(packageId??"") as {snapshot_json:string;visibility:string;id:string;exam_id:string}|undefined;
-    if(!pack||(!input.taskId&&pack.visibility!=="public"))throw new HttpError("Paket tidak tersedia.",404);
+    if(!pack||(!input.taskId&&!canStartProductPackage(user.id,pack.id,pack.visibility)))throw new HttpError("Paket tidak tersedia untuk akunmu.",404);
     const profile=db().prepare("SELECT active FROM exam_profiles WHERE id=?").get(pack.exam_id) as {active:number}|undefined;
     if(!profile?.active)throw new HttpError("Ujian sedang dinonaktifkan.",409);
     const snapshot=JSON.parse(pack.snapshot_json) as PackageSnapshot;
@@ -70,13 +71,6 @@ export function startAssessment(user:User,input:{packageId?:string;taskId?:strin
     return id;
   });
 }
-function assessmentOptionOrder(row: AssessmentRow, question: Pick<SnapshotQuestion,"revision"|"questionId"|"id"|"options">) {
-  // First-generation TOEFL seed content has predictable keys. Preserve the authored
-  // order for other bank questions, including questions that refer to option labels.
-  const seeded = question.revision === 1 && /^legacy-(?:L|LT|S|R)-/.test(question.questionId);
-  return optionOrder(seeded ? row.option_seed : null, question.id, question.options.length);
-}
-
 /** Counts only server-observed, recently heartbeated visible intervals, capped at 15 s. */
 function flushTiming(row:AssessmentRow,now:number) {
   if(row.timing_question_id&&row.last_tick_at!==null){
@@ -100,7 +94,7 @@ function finish(row:AssessmentRow,when:number) {
 }
 function advance(row:AssessmentRow,when:number) {
   const snapshot=JSON.parse(row.snapshot_json) as PackageSnapshot;
-  if(row.section_index>=snapshot.sections.length-1){finish(row,when);return;}
+  if(snapshot.skd||row.section_index>=snapshot.sections.length-1){finish(row,when);return;}
   flushTiming(row,when);row.section_index++;
   const duration=snapshot.sections[row.section_index].durationSeconds;
   row.deadline=duration?when+duration*1000:null;row.timing_question_id=null;row.last_tick_at=null;
@@ -170,7 +164,7 @@ export function mutateAssessment(id:string,userId:string,input:Record<string,unk
     }
     const q=snapshot.questions.find(q=>q.id===input.questionId);
     if(!q)throw new HttpError("Soal tidak ditemukan.",400);
-    if(q.section!==snapshot.sections[row.section_index].key){
+    if(!snapshot.skd&&q.section!==snapshot.sections[row.section_index].key){
       if(input.action==="answer")return null;
       throw new HttpError("Soal tidak tersedia pada bagian aktif.",400);
     }
@@ -180,7 +174,7 @@ export function mutateAssessment(id:string,userId:string,input:Record<string,unk
       const choice=input.choice;
       if(choice!==null&&(typeof choice!=="number"||!Number.isInteger(choice)||choice<0||choice>=q.options.length))throw new HttpError("Pilihan jawaban tidak valid.",400);
       const answers=JSON.parse(row.answers_json) as Record<string,number>;
-      if(choice===null)delete answers[q.id];else answers[q.id]=assessmentOptionOrder(row,q)[choice];
+      if(choice===null)delete answers[q.id];else answers[q.id]=assessmentOptionOrder(row.option_seed,q)[choice];
       row.answers_json=JSON.stringify(answers);db().prepare("UPDATE assessment_attempts SET answers_json=? WHERE id=?").run(row.answers_json,row.id);
     } else if(input.action==="view"){
       if(typeof input.visible!=="boolean")throw new HttpError("Status visibilitas tidak valid.",400);
@@ -195,12 +189,12 @@ export function mutateAssessment(id:string,userId:string,input:Record<string,unk
 export function publicAssessment(row:AssessmentRow, now=Date.now()):PublicAssessment {
   const snap=JSON.parse(row.snapshot_json) as PackageSnapshot;
   const listening=activeListening(row,snap);
-  const available=listening?[listening.question]:row.status==="finished"?snap.questions:snap.questions.filter(q=>q.section===snap.sections[row.section_index].key);
+  const available=listening?[listening.question]:row.status==="finished"||snap.skd?snap.questions:snap.questions.filter(q=>q.section===snap.sections[row.section_index].key);
   const stored=JSON.parse(row.answers_json) as Record<string,number>;
   const answers:PublicAssessment["answers"]={};
   const orders=new Map<string,number[]>();
   const questions=available.map(({answer:_,explanation:__,scores:___,...q})=>{
-    const order=assessmentOptionOrder(row,q);
+    const order=assessmentOptionOrder(row.option_seed,q);
     orders.set(q.id,order);
     if(stored[q.id]!==undefined)answers[q.id]=order.indexOf(stored[q.id]);
     const options=order.map(index=>q.options[index]);
@@ -209,12 +203,14 @@ export function publicAssessment(row:AssessmentRow, now=Date.now()):PublicAssess
   });
   const safe:PublicAssessment={id:row.id,title:snap.title,examTitle:snap.examTitle,status:row.status,sections:snap.sections,sectionIndex:row.section_index,deadline:row.deadline,startedAt:row.started_at,finishedAt:row.finished_at,answers,questions};
   if (snap.itpSimulation) safe.itpSimulation = true;
+  if (snap.skd) safe.skd = snap.skd;
   if (listening) safe.listening = { position: row.listening_index + 1, total: listening.total, part: listening.clip.part, audioUntil: row.listening_audio_until };
   if(row.status==="finished"){
     const responses=db().prepare("SELECT * FROM assessment_responses WHERE attempt_id=?").all(row.id) as {revision_id:string;selected:number|null;points:number;max_points:number;correct:number;observed_ms:number}[];
     safe.result={points:responses.reduce((n,r)=>n+r.points,0),maxPoints:responses.reduce((n,r)=>n+r.max_points,0),correct:responses.reduce((n,r)=>n+r.correct,0),total:snap.questions.length,details:snap.questions.map(q=>{
       const r=responses.find(r=>r.revision_id===q.id)!,order=orders.get(q.id)!;
-      return {id:q.id,selected:r.selected===null?null:order.indexOf(r.selected),answer:order.indexOf(q.answer),explanation:q.explanation,points:r.points,maxPoints:r.max_points,observedMs:r.observed_ms};
+      return {id:q.id,selected:r.selected===null?null:order.indexOf(r.selected),answer:order.indexOf(q.answer),explanation:q.explanation,points:r.points,maxPoints:r.max_points,observedMs:r.observed_ms,
+        ...(snap.skd ? { optionScores: order.map(index => q.scores[index]) } : {})};
     })};
   }
   return safe;

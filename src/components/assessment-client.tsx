@@ -1,42 +1,142 @@
 "use client";
 import Link from "next/link";
-import { useEffect,useState,useRef } from "react";
+import { useEffect,useState,useRef,type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import type { PublicAssessment } from "@/lib/learning-types";
-import { ReadingPassage } from "./reading-passage";
-import { ConfirmDialog } from "./ui-dialog";
+import type { PackageSnapshot, PublicAssessment } from "@/lib/learning-types";
+import { createAssessmentPreview } from "@/lib/assessment-preview";
+import { AssessmentWorkspace } from "./assessment-workspace";
 import { AssessmentResults } from "./assessment-results";
 import { ItpListening } from "./itp-listening";
 import { availableVoices,selectSpeechVoices,splitSpeechLines } from "@/lib/listening-speech";
+import { StudentRoomBara } from "./student-room-bara";
 
-export function AssessmentClient({id}:{id:string}){
-  const [data,setData]=useState<PublicAssessment|null>(null),[index,setIndex]=useState(0),[error,setError]=useState(""),[busy,setBusy]=useState(false),[now,setNow]=useState(Date.now());
-  const [confirmAdvance,setConfirmAdvance]=useState<number|null>(null),[flagged,setFlagged]=useState<Record<string,boolean>>({}),[saveState,setSaveState]=useState("idle"),[online,setOnline]=useState(true);
+export function AssessmentClient({ id, renderFollowUp, onFinished, preview }: {
+  id: string;
+  renderFollowUp?: (data: PublicAssessment) => ReactNode;
+  onFinished?: (data: PublicAssessment) => void;
+  preview?: PackageSnapshot;
+}) {
+  const [previewSession] = useState(() => preview ? createAssessmentPreview(id, preview) : null);
+  const backHref = previewSession ? "/manage/packages#package-list" : "/paket";
+  const [data,setData]=useState<PublicAssessment|null>(null),[navigation,setNavigation]=useState({ section: 0, position: 0 }),[error,setError]=useState(""),[busy,setBusy]=useState(false),[now,setNow]=useState(Date.now());
+  useEffect(() => {
+    if (data?.status === "finished") onFinished?.(data);
+  }, [data, onFinished]);
+  const [saveState,setSaveState]=useState("idle"),[online,setOnline]=useState(true),[speaking,setSpeaking]=useState(false);
   const router=useRouter(),mounted=useRef(true),speechSequence=useRef(0),requestSequence=useRef(0),saving=useRef(false);
-  async function refresh(){if(saving.current)return;const sequence=++requestSequence.current;const r=await fetch(`/api/assessments/${id}`,{cache:"no-store"});if(r.status===401){router.replace("/login");return;}const result=await r.json();if(!r.ok)throw Error(result.error);if(mounted.current&&sequence===requestSequence.current&&!saving.current)setData(result);}
-  useEffect(()=>{mounted.current=true;void refresh().catch(e=>setError(e.message));const poll=setInterval(()=>{void refresh().catch(()=>{});},15000),clock=setInterval(()=>setNow(Date.now()),1000);return()=>{mounted.current=false;clearInterval(poll);clearInterval(clock);};},[id]);
+  async function refresh(){if(saving.current)return;
+    if (previewSession) { setData(previewSession.load()); return; }
+    const sequence=++requestSequence.current;const r=await fetch(`/api/assessments/${id}`,{cache:"no-store"});if(r.status===401){router.replace("/login");return;}const result=await r.json();if(!r.ok)throw Error(result.error);if(mounted.current&&sequence===requestSequence.current&&!saving.current)setData(result);}
+  useEffect(()=>{mounted.current=true;void refresh().catch(e=>setError(e.message));const poll=previewSession ? undefined : setInterval(()=>{void refresh().catch(()=>{});},15000),clock=setInterval(()=>setNow(Date.now()),1000);return()=>{mounted.current=false;clearInterval(poll);clearInterval(clock);};},[id]);
   useEffect(()=>{const update=()=>setOnline(navigator.onLine);update();window.addEventListener("online",update);window.addEventListener("offline",update);return()=>{window.removeEventListener("online",update);window.removeEventListener("offline",update);};},[]);
-  const question=data?.questions[Math.min(index,Math.max(0,data.questions.length-1))];
-  useEffect(()=>{setIndex(0);setConfirmAdvance(null);},[data?.sectionIndex]);
+  const index = data?.sectionIndex === navigation.section ? navigation.position : 0;
+  const question = data?.questions[Math.min(index, Math.max(0, data.questions.length - 1))];
+  useEffect(() => { setSpeaking(false); }, [question?.id]);
   useEffect(()=>{if(data?.status==="active"&&data.deadline!==null&&now>=data.deadline)void refresh().catch(e=>setError(e.message));},[Math.floor(now/5000),data?.deadline,data?.status]);
   useEffect(()=>{
     if(!question||data?.status!=="active")return;
+    if (previewSession) return () => { speechSequence.current++; window.speechSynthesis?.cancel(); };
     const tick=(visible:boolean)=>void fetch(`/api/assessments/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"view",questionId:question.id,visible}),keepalive:true}).catch(()=>{});
     const report=()=>tick(document.visibilityState==="visible"&&document.hasFocus());report();
     const interval=setInterval(report,10000);document.addEventListener("visibilitychange",report);window.addEventListener("focus",report);window.addEventListener("blur",report);
     return()=>{clearInterval(interval);document.removeEventListener("visibilitychange",report);window.removeEventListener("focus",report);window.removeEventListener("blur",report);tick(false);speechSequence.current++;window.speechSynthesis?.cancel();};
-  },[id,question?.id,data?.status]);
+  },[id,question?.id,data?.status,previewSession]);
+  const loadPreviewAudio = previewSession ? async (questionId: string, signal: AbortSignal) => {
+    previewSession.listen(questionId);
+    const response = await fetch(`/api/admin/package-preview/${encodeURIComponent(id)}/audio?questionId=${encodeURIComponent(questionId)}`,
+      { cache: "no-store", signal });
+    if (!response.ok) throw Error((await response.json()).error);
+    const audio = await response.blob();
+    if (!signal.aborted) previewSession.listen(questionId, true);
+    return audio;
+  } : undefined;
+
   async function act(payload:Record<string,unknown>){
+    if (previewSession) {
+      setError("");
+      try { setData(previewSession.act(payload)); }
+      catch (error) {
+        setData(previewSession.load());
+        setError(error instanceof Error ? error.message : "Tindakan pratinjau gagal.");
+      }
+      return;
+    }
     setSaveState("saving");saving.current=true;const sequence=++requestSequence.current;setBusy(true);setError("");try{const r=await fetch(`/api/assessments/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await r.json();if(!r.ok){saving.current=false;await refresh().catch(()=>{});throw Error(result.error);}if(mounted.current&&sequence===requestSequence.current){setData(result);setSaveState("saved");}}catch(e){setSaveState("error");setError(e instanceof Error?e.message:"Jawaban belum tersimpan. Periksa koneksi, lalu pilih ulang jawabanmu.");}finally{saving.current=false;setBusy(false);}
   }
-  async function speak(){
-    if(!question||!("speechSynthesis" in window)){setError("Suara browser tidak tersedia. Gunakan perangkat yang mendukung.");return;}
-    const seq=++speechSequence.current;window.speechSynthesis.cancel();const voices=selectSpeechVoices(await availableVoices(window.speechSynthesis));
-    for(const line of splitSpeechLines(question.stimulus)){if(seq!==speechSequence.current)return;await new Promise<void>(resolve=>{const u=new SpeechSynthesisUtterance(line.text);u.lang="en-US";u.voice=voices[line.speaker]??null;u.onend=()=>resolve();u.onerror=()=>resolve();window.speechSynthesis.speak(u);});}
+  function stopSpeech() {
+    speechSequence.current++;
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
   }
-  if(!data)return <main className="shell assessment-loading"><div className="loading-skeleton" aria-hidden="true"/><h1>Menyiapkan ruang latihan.</h1><p role="status">{error||"Memuat sesi…"}</p><Link className="button ghost" href="/catalog">Kembali ke paket latihan</Link></main>;
-  const answered=data.questions.filter(q=>data.answers[q.id]!==undefined).length,position=Math.min(index,data.questions.length-1);
-  return <main className="shell assessment-shell"><header className="assessment-topbar"><Link href="/catalog" className="assessment-back">← Paket latihan</Link><span className="assessment-exam">{data.examTitle}</span>{data.status==="active"&&<span className="topbar-timer" aria-hidden="true">{data.deadline===null?"Tanpa timer":`${Math.floor(Math.max(0,data.deadline-now)/60000)}:${String(Math.floor(Math.max(0,data.deadline-now)/1000)%60).padStart(2,"0")}`}</span>}<span className={`save-indicator ${saveState==="error"||!online?"failed":""}`} role="status">{!online?"Offline":saveState==="saving"?"Menyimpan…":saveState==="error"?"Belum tersimpan":data.status==="finished"?"Hasil tersimpan":"Jawaban tersimpan"}</span></header>{error&&<p className="error-banner" role="alert">{error}</p>}{!online&&<p className="error-banner" role="alert">Koneksi terputus. Jawaban baru belum dapat disimpan. Setelah terhubung, pilih ulang jawaban yang belum tersimpan.</p>}
-    {data.status==="finished"&&data.result?<AssessmentResults data={data}/>:question?<><section className="assessment-heading"><div><span className="eyebrow">BAGIAN {data.sectionIndex+1} DARI {data.sections.length}</span><h1>{data.sections[data.sectionIndex].title}</h1><p>{data.title}</p></div><div className={`timer-card ${data.deadline!==null&&data.deadline-now<120000?"low-time":""}`}><small>WAKTU TERSISA</small><strong role="timer" aria-live="off">{data.deadline===null?"Tanpa timer":`${Math.floor(Math.max(0,data.deadline-now)/60000)}:${String(Math.floor(Math.max(0,data.deadline-now)/1000)%60).padStart(2,"0")}`}</strong><span>Timer mengikuti waktu server</span></div></section>{data.listening ? <ItpListening key={question.id} id={id} data={{ ...data, listening: data.listening }} now={now} busy={busy} online={online} act={act} sync={refresh} /> : <div className="assessment-layout"><section><article className="workspace-card assessment-question"><div className="question-heading"><span className="status-badge neutral">Soal {position+1} dari {data.questions.length}</span><button type="button" className={`flag-button ${flagged[question.id]?"flagged":""}`} aria-pressed={!!flagged[question.id]} onClick={()=>setFlagged(f=>({...f,[question.id]:!f[question.id]}))}>{flagged[question.id]?"★ Ditandai":"☆ Tandai"}</button></div>{question.kind==="audio"?<div className="audio-panel"><span aria-hidden="true">♫</span><div><h3>Dengarkan naskah.</h3><p>Suara browser, bukan rekaman ujian resmi.</p><div className="inline-actions"><button type="button" className="button ghost" onClick={()=>void speak()}>Putar audio</button><button type="button" className="text-button" onClick={()=>{speechSequence.current++;window.speechSynthesis.cancel();}}>Hentikan</button></div></div></div>:question.stimulus&&(question.section==="reading"?<ReadingPassage text={question.stimulus} prompt={question.prompt}/>:<p className="preserve-text stimulus-panel">{question.stimulus}</p>)}<h2>{question.prompt}</h2><fieldset disabled={busy||!online}><legend className="sr-only">Pilih jawaban</legend>{question.options.map((option,i)=><label className={`assessment-option ${data.answers[question.id]===i?"selected":""}`} key={i}><input type="radio" name={question.id} checked={data.answers[question.id]===i} onChange={()=>void act({action:"answer",questionId:question.id,choice:i})}/><span className="option-letter" aria-hidden="true">{String.fromCharCode(65+i)}</span><span>{option}</span></label>)}</fieldset><button className="text-button" disabled={busy||!online||data.answers[question.id]===undefined} onClick={()=>void act({action:"answer",questionId:question.id,choice:null})}>Kosongkan jawaban</button></article><div className="assessment-bottom-nav"><button className="button ghost" disabled={busy||position===0} onClick={()=>setIndex(i=>i-1)}>← Sebelumnya</button>{position<data.questions.length-1?<button className="button dark" disabled={busy} onClick={()=>setIndex(i=>i+1)}>Berikutnya →</button>:<button className="button primary" disabled={busy||!online} onClick={()=>setConfirmAdvance(data.sectionIndex)}>{data.sectionIndex===data.sections.length-1?"Selesaikan sesi":"Lanjutkan bagian"}</button>}</div></section><aside className="workspace-card question-sidebar"><h2>Navigasi soal</h2><p>{answered} dari {data.questions.length} terjawab</p><div className="progress-track"><span style={{width:`${answered/data.questions.length*100}%`}}/></div><nav className="question-navigation" aria-label="Navigasi soal">{data.questions.map((q,i)=><button type="button" disabled={busy} aria-label={`Soal ${i+1}${data.answers[q.id]!==undefined?", terjawab":", belum dijawab"}${flagged[q.id]?", ditandai":""}`} aria-current={i===position?"step":undefined} className={`${data.answers[q.id]!==undefined?"answered":""} ${flagged[q.id]?"flagged":""}`} key={q.id} onClick={()=>setIndex(i)}>{i+1}</button>)}</nav><div className="navigation-legend"><span><i className="legend-answered"/>Terjawab</span><span><i className="legend-empty"/>Belum dijawab</span><span><i className="legend-flagged"/>Ditandai</span></div><p className="muted">Tanda hanya membantu peninjauan dan tidak memengaruhi nilai. Tanda hilang jika halaman dimuat ulang.</p><button className="button ghost" disabled={busy||!online} onClick={()=>setConfirmAdvance(data.sectionIndex)}>Tinjau & akhiri bagian</button><p className="timing-disclosure">Waktu tampilan soal dicatat untuk evaluasi materi, bukan untuk mengukur perhatian.</p></aside></div>}</>:<p>Tidak ada soal pada bagian ini.</p>}{data.status==="active"&&confirmAdvance===data.sectionIndex&&<ConfirmDialog title={data.sectionIndex===data.sections.length-1?"Selesaikan latihan ini?":"Kunci bagian dan lanjutkan?"} description={`${answered} dari ${data.questions.length} soal terjawab. ${data.questions.length-answered} soal masih kosong. Jawaban bagian ini akan dikunci dan tidak bisa diubah setelah kamu melanjutkan.`} confirmLabel={data.sectionIndex===data.sections.length-1?"Ya, selesaikan":"Kunci & lanjutkan"} busy={busy} onClose={()=>setConfirmAdvance(null)} onConfirm={async()=>{await act({action:"advance",sectionIndex:confirmAdvance});setConfirmAdvance(null);}}/>}
+
+  async function speak() {
+    if (!question || !("speechSynthesis" in window)) {
+      setError("Suara browser tidak tersedia. Gunakan perangkat yang mendukung.");
+      return;
+    }
+    stopSpeech();
+    setError("");
+    setSpeaking(true);
+    const sequence = speechSequence.current;
+    const voices = selectSpeechVoices(await availableVoices(window.speechSynthesis));
+    for (const line of splitSpeechLines(question.stimulus)) {
+      if (sequence !== speechSequence.current) return;
+      await new Promise<void>(resolve => {
+        const speech = new SpeechSynthesisUtterance(line.text);
+        speech.lang = "en-US";
+        speech.voice = voices[line.speaker] ?? null;
+        speech.onend = speech.onerror = () => resolve();
+        window.speechSynthesis.speak(speech);
+      });
+    }
+    if (sequence === speechSequence.current) setSpeaking(false);
+  }
+
+  if (!data) return <main className="shell assessment-loading">
+    {!error && <div className="loading-skeleton" aria-hidden="true" />}
+    <h1>{error ? "Sesi belum bisa dibuka." : previewSession ? "Pratinjau simulasi" : "Menyiapkan ruang latihan."}</h1>
+    <p role={error ? "alert" : "status"}>{error || "Memuat sesi…"}</p>
+    <Link className="button ghost" href={backHref}>{previewSession ? "Kembali ke Materi latihan" : "Kembali ke paket latihan"}</Link>
+  </main>;
+
+  const remaining = data.deadline === null ? null : Math.ceil(Math.max(0, data.deadline - now) / 1000);
+  const minutes = remaining === null ? 0 : Math.floor(remaining / 60);
+  const clock = remaining === null ? null : minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+  const position = Math.min(index, data.questions.length - 1);
+  const status = !online ? "Offline" : previewSession ? "Pratinjau admin" : saveState === "saving" ? "Menyimpan…"
+    : saveState === "error" ? "Jawaban belum tersimpan" : data.status === "finished" ? "Sesi selesai"
+      : saveState === "saved" ? "Jawaban tersimpan" : "Sesi aktif";
+
+  return <main className="assessment-app">
+    <header className="assessment-bar">
+      <div className="assessment-wrap assessment-bar-inner">
+        <Link className="assessment-control assessment-back-link" href={backHref} aria-label={previewSession ? "Kembali ke Materi latihan" : "Kembali ke paket latihan"}
+          aria-disabled={busy} onClick={event => { if (busy) event.preventDefault(); }}>
+          <span aria-hidden="true">←</span><span>Kembali</span>
+        </Link>
+        <div className="assessment-session">
+          <p>{data.title}</p>
+          <span className={`assessment-session-status${saveState === "error" || !online ? " is-error" : ""}`} role="status">{status}</span>
+        </div>
+        {data.status === "active" && <div className={`assessment-clock${remaining !== null && remaining < 120 ? " is-urgent" : ""}`}
+          role={clock === null ? undefined : "timer"} aria-label={clock === null ? undefined : "Waktu tersisa"} aria-live="off">
+          {clock === null ? <span><span className="student-room-bara-status"><StudentRoomBara /><span className="student-room-bara-time">Tanpa timer</span></span></span> : <><span>Sisa waktu</span><strong>{clock}</strong></>}
+        </div>}
+      </div>
+    </header>
+    {(previewSession || error || !online) && <div className="assessment-wrap assessment-notices">
+      {previewSession && <p className="assessment-preview-note">Pratinjau admin · Jawaban dan hasil hanya ada di tab ini.</p>}
+      {error && <p className="error-banner" role="alert">{error}</p>}
+      {!online && <p className="error-banner" role="alert">Koneksi terputus. Sambungkan kembali sebelum melanjutkan.</p>}
+    </div>}
+    {data.status === "finished" && data.result
+      ? <div className="shell assessment-shell"><AssessmentResults data={data} followUp={renderFollowUp?.(data)} preview={!!previewSession} /></div>
+      : question ? <AssessmentWorkspace data={data} position={position} onJump={position => setNavigation({ section: data.sectionIndex, position })} busy={busy} online={online} onAction={act}
+        speaking={speaking} onSpeak={() => void speak()} onStop={stopSpeech} recordsViewingTime={!previewSession}
+        listening={data.listening && <ItpListening key={question.id} id={id} data={{ ...data, listening: data.listening }}
+          now={now} busy={busy} online={online} act={act} sync={refresh} loadPreviewAudio={loadPreviewAudio} />} />
+      : <p className="assessment-wrap">Tidak ada soal pada bagian ini.</p>}
   </main>;
 }

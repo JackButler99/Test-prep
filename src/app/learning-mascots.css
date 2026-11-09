@@ -1,0 +1,87 @@
+/* Decorative art occupies its own space in the opening panels. */
+:where(
+  .learning-hero:has(+ .dashboard-tests):has(> :only-child),
+  .workspace-heading.study-heading,
+  .workspace-heading.catalog-mascot-heading
+) {
+  --mascot-width: clamp(7rem, 14vw, 10rem);
+  --mascot-panel-padding: clamp(1rem, 2.5vw, 1.625rem);
+  --mascot-panel-end: calc(var(--mascot-width) + var(--mascot-panel-padding) + .75rem);
+  position: relative;
+}
+
+.learning-hero:has(+ .dashboard-tests):has(> :only-child) {
+  --mascot-image: url("/illustrations/pandu-kompas.svg");
+  display: block;
+  min-block-size: 7.75rem;
+  padding: var(--mascot-panel-padding);
+  padding-inline-end: var(--mascot-panel-end);
+  background: linear-gradient(110deg, #24543d, #365f48);
+}
+
+.workspace-heading.study-heading,
+.workspace-heading.catalog-mascot-heading {
+  min-block-size: 8rem;
+  margin-block: 1rem 1.25rem;
+  padding: var(--mascot-panel-padding);
+  padding-inline-end: var(--mascot-panel-end);
+  border: 1px solid #d7e5d9;
+  border-radius: 1rem;
+  background: linear-gradient(108deg, #eef5ee, #f9fbf7);
+}
+
+.workspace-heading.study-heading {
+  --mascot-image: url("/illustrations/ramu-buku.svg");
+}
+
+.workspace-heading.catalog-mascot-heading {
+  --mascot-image: url("/illustrations/tilik-kartu.svg");
+}
+
+:where(
+  .learning-hero:has(+ .dashboard-tests):has(> :only-child),
+  .workspace-heading.study-heading,
+  .workspace-heading.catalog-mascot-heading
+)::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: var(--mascot-panel-padding);
+  inset-block-start: 50%;
+  inline-size: var(--mascot-width);
+  aspect-ratio: 240 / 176;
+  transform: translateY(-50%);
+  background: var(--mascot-image) center / contain no-repeat;
+  pointer-events: none;
+}
+
+.learning-hero:has(+ .dashboard-tests) .button {
+  max-inline-size: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 42rem) {
+  :where(
+    .learning-hero:has(+ .dashboard-tests):has(> :only-child),
+    .workspace-heading.study-heading,
+    .workspace-heading.catalog-mascot-heading
+  ) {
+    --mascot-width: clamp(3.75rem, 12vw, 4.75rem);
+  }
+}
+
+@media (max-width: 21.875rem), (forced-colors: active) {
+  :where(
+    .learning-hero:has(+ .dashboard-tests):has(> :only-child),
+    .workspace-heading.study-heading,
+    .workspace-heading.catalog-mascot-heading
+  ) {
+    --mascot-panel-end: var(--mascot-panel-padding);
+  }
+  :where(
+    .learning-hero:has(+ .dashboard-tests):has(> :only-child),
+    .workspace-heading.study-heading,
+    .workspace-heading.catalog-mascot-heading
+  )::after {
+    display: none;
+  }
+}

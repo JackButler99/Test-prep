@@ -1,0 +1,32 @@
+.exam-proctor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(3.75rem, 26%, 6.5rem);
+  align-items: center;
+  gap: .625rem;
+  inline-size: 100%;
+}
+
+.exam-proctor-copy { overflow-wrap: anywhere; }
+.exam-proctor-copy .start-facts { flex-wrap: wrap; gap: .375rem 1rem; }
+.action-feature .exam-proctor-copy h3 { margin-block: .75rem; }
+
+.exam-proctor-mascot {
+  margin: 0;
+  text-align: center;
+  pointer-events: none;
+}
+.exam-proctor-mascot img {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+}
+.exam-proctor-mascot figcaption {
+  font-size: .6875rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+@media (max-width: 21.875rem), (forced-colors: active) {
+  .exam-proctor { grid-template-columns: minmax(0, 1fr); }
+  .exam-proctor-mascot { display: none; }
+}

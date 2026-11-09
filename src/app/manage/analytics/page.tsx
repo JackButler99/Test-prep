@@ -5,7 +5,7 @@ import { examProfiles,listPackages } from "@/lib/learning-bank";
 import { PlatformShell } from "@/components/platform-shell";
 export const dynamic="force-dynamic";
 export default async function Analytics({searchParams}:{searchParams:Promise<{exam?:string|string[];package?:string|string[];classroom?:string|string[]}>}){
-  const user=await dashboardUser("admin","instructor"),params=await searchParams;
+  const user=await dashboardUser("admin"),params=await searchParams;
   const first=(value:string|string[]|undefined)=>Array.isArray(value)?value[0]:value;
   const exam=first(params.exam),pack=first(params.package),classroom=first(params.classroom);
   const report=analytics(user,{examId:exam,packageId:pack,classroomId:classroom}),packages=listPackages(user);

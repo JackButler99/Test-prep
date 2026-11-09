@@ -13,6 +13,8 @@ import { BankImportDialog } from "./bank-import-dialog";
 import { BankExportDialog } from "./bank-export-dialog";
 import { Disclosure } from "./disclosure";
 import { ReadingPassage } from "./reading-passage";
+import { SKD_EXAM_ID, skdFigure } from "@/lib/skd-format";
+import { SkdFigureOrText } from "./skd-figure";
 
 const stateLabel = (state: string) => state === "draft" ? "Draf" : STATE_LABELS[state] ?? state;
 const tone = (state: string) => state === "published" ? "success" : state === "review" ? "warning" : "neutral";
@@ -32,6 +34,7 @@ const BANK_VIEWS = [
 
 export function BankWorkspace({ bank, profiles, admin, userId }: { bank: BankRow[]; profiles: ExamProfile[]; admin: boolean; userId: string }) {
   const [editor, setEditor] = useState<BankRow | "new" | null>(null), [detail, setDetail] = useState<BankRow | null>(null);
+  const detailHasFigure = detail?.examId === SKD_EXAM_ID && detail.section === "tiu" && Boolean(skdFigure(detail.content.stimulus));
   const [editorBusy, setEditorBusy] = useState(false), [dirty, setDirty] = useState(false), [discard, setDiscard] = useState(false), [importing, setImporting] = useState(false), [exporting, setExporting] = useState(false);
   const [exam, setExam] = useState(""), [section, setSection] = useState(""), [state, setState] = useState<string>("draft"), [kind, setKind] = useState(""), [scope, setScope] = useState(""), [query, setQuery] = useState(""), [sort, setSort] = useState("default");
   const [selected, setSelected] = useState<string[]>([]), [page, setPage] = useState(0), [actionId, setActionId] = useState(""), [note, setNote] = useState("");
@@ -121,7 +124,41 @@ export function BankWorkspace({ bank, profiles, admin, userId }: { bank: BankRow
       {!examMetrics.length && <p className="bank-help">Belum ada profil ujian. Tambahkan profil untuk mulai mengelompokkan materi.</p>}
     </section>
     <Disclosure title="Alur pengelolaan soal" description="Draf → review → terbit. Materi yang ditarik tidak dipakai untuk sesi baru."><p>{admin ? "Periksa isi, kunci, pengecoh dan pembahasan saat status review. Catatan pemeriksaan wajib untuk menerbitkan. Soal terbit dapat disusun menjadi paket." : "Soal milikmu dapat diajukan dari draf ke review. Admin memeriksa dan menerbitkan materi sebelum dipakai dalam paket."}</p><p>Menyunting soal membuat revisi baru. Materi terbit serta hasil sesi sebelumnya tetap memakai versi semula. Materi publik milik pihak lain hanya dapat kamu tinjau.</p></Disclosure>
-    {detail && <UiDialog title="Tinjau soal" wide onClose={() => setDetail(null)}><div className="bank-detail"><div className="bank-detail-meta"><span className={`status-badge ${tone(detail.state)}`}>{stateLabel(detail.state)}</span><span>Revisi {detail.revision}</span><span>{STATE_LABELS[detail.visibility]}</span></div><p className="bank-detail-context">{examTitle(detail)} / {sectionTitle(detail)} · {detail.content.skill}</p>{detail.content.stimulus && <section><h3>{detail.content.kind === "audio" ? "Naskah Listening" : "Bacaan / konteks"}</h3>{detail.content.kind === "audio" && <p className="bank-help">Naskah ini dibacakan suara browser pada sesi latihan. Ini bukan rekaman sumber.</p>}{detail.section==="reading"&&detail.content.kind!=="audio"?<ReadingPassage text={detail.content.stimulus} prompt={detail.content.prompt} headingLevel={3}/>:<div className="bank-stimulus preserve-text">{detail.content.stimulus}</div>}</section>}<section><h3>Pertanyaan</h3><p className="bank-detail-prompt preserve-text">{detail.content.prompt}</p><ol className="bank-answer-list">{detail.content.options.map((option, i) => <li className={i === detail.content.answer ? "correct" : ""} key={i}><span className="bank-answer-letter">{String.fromCharCode(65 + i)}</span><span className="preserve-text">{option}</span><span className="bank-answer-score">{i === detail.content.answer && <strong>✓ Kunci</strong>}{detail.content.scores[i]} poin</span></li>)}</ol></section><section className="bank-explanation"><h3>Pembahasan</h3><p className="preserve-text">{detail.content.explanation}</p></section>{detail.reviewNote && <section><h3>Catatan review</h3><p className="preserve-text">{detail.reviewNote}</p></section>}<Disclosure className="bank-reference" title="Identitas revisi"><code>{detail.id}</code><p>ID soal: <code>{detail.questionId}</code></p></Disclosure><div className="dialog-actions"><button type="button" className="button ghost" onClick={() => setDetail(null)}>Tutup</button>{editable(detail) && <button type="button" className="button primary" onClick={() => edit(detail)}>Sunting sebagai revisi baru</button>}</div></div></UiDialog>}
+    {detail && <UiDialog title="Tinjau soal" wide onClose={() => setDetail(null)}>
+      <div className="bank-detail">
+        <div className="bank-detail-meta">
+          <span className={`status-badge ${tone(detail.state)}`}>{stateLabel(detail.state)}</span>
+          <span>Revisi {detail.revision}</span><span>{STATE_LABELS[detail.visibility]}</span>
+        </div>
+        <p className="bank-detail-context">{examTitle(detail)} / {sectionTitle(detail)} · {detail.content.skill}</p>
+        {detail.content.stimulus && <section>
+          <h3>{detail.content.kind === "audio" ? "Naskah Listening" : detailHasFigure ? "Gambar soal" : "Bacaan / konteks"}</h3>
+          {detail.content.kind === "audio" && <p className="bank-help">Naskah ini dibacakan suara browser pada sesi latihan. Ini bukan rekaman sumber.</p>}
+          {detailHasFigure ? <SkdFigureOrText value={detail.content.stimulus} />
+            : detail.section === "reading" && detail.content.kind !== "audio"
+              ? <ReadingPassage text={detail.content.stimulus} prompt={detail.content.prompt} headingLevel={3} />
+              : <div className="bank-stimulus preserve-text">{detail.content.stimulus}</div>}
+        </section>}
+        <section>
+          <h3>Pertanyaan</h3>
+          <p className="bank-detail-prompt preserve-text">{detail.content.prompt}</p>
+          <ol className={`bank-answer-list${detailHasFigure ? " skd-bank-options" : ""}`}>
+            {detail.content.options.map((option, i) => <li className={i === detail.content.answer ? "correct" : ""} key={i}>
+              <span className="bank-answer-letter">{String.fromCharCode(65 + i)}</span>
+              <span><SkdFigureOrText value={option} enabled={detailHasFigure} /></span>
+              <span className="bank-answer-score">{i === detail.content.answer && <strong>✓ Kunci</strong>}{detail.content.scores[i]} poin</span>
+            </li>)}
+          </ol>
+        </section>
+        <section className="bank-explanation"><h3>Pembahasan</h3><p className="preserve-text">{detail.content.explanation}</p></section>
+        {detail.reviewNote && <section><h3>Catatan review</h3><p className="preserve-text">{detail.reviewNote}</p></section>}
+        <Disclosure className="bank-reference" title="Identitas revisi"><code>{detail.id}</code><p>ID soal: <code>{detail.questionId}</code></p></Disclosure>
+        <div className="dialog-actions">
+          <button type="button" className="button ghost" onClick={() => setDetail(null)}>Tutup</button>
+          {editable(detail) && <button type="button" className="button primary" onClick={() => edit(detail)}>Sunting sebagai revisi baru</button>}
+        </div>
+      </div>
+    </UiDialog>}
     {editor && <UiDialog title={editor === "new" ? "Buat soal baru" : "Sunting soal"} wide onClose={closeEditor}><QuestionEditor profiles={profiles} initial={editor === "new" ? undefined : editor} onBusyChange={setEditorBusy} onDirty={() => setDirty(true)} onSaved={() => { setEditor(null); setDirty(false); resetFilters(); showState("draft"); announce("Draf soal tersimpan. Ajukan review setelah materi siap diperiksa."); router.refresh(); }}/></UiDialog>}
     {exporting && <BankExportDialog count={bank.length} onClose={() => setExporting(false)} onSuccess={count => { setExporting(false); announce(`File audit ${count} soal telah disiapkan untuk diunduh. Periksa folder unduhan browser.`); }}/>}
     {importing && <BankImportDialog profiles={profiles} admin={admin} onClose={() => setImporting(false)} onSuccess={count => { setImporting(false); resetFilters(); showState("draft"); announce(`${count} soal berhasil diimpor sebagai draf. File yang sama tidak perlu diimpor ulang.`); router.refresh(); }}/>}

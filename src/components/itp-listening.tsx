@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { PublicAssessment } from "@/lib/learning-types";
+import { AssessmentChoices } from "./assessment-workspace";
 
 const PARTS = { A: "Dialog pendek", B: "Percakapan panjang", C: "Paparan" };
 
-export function ItpListening({ id, data, now, busy, online, act, sync }: {
+export function ItpListening({ id, data, now, busy, online, act, sync, loadPreviewAudio }: {
   id: string;
   data: PublicAssessment & { listening: NonNullable<PublicAssessment["listening"]> };
   now: number;
@@ -13,6 +14,7 @@ export function ItpListening({ id, data, now, busy, online, act, sync }: {
   online: boolean;
   act: (payload: Record<string, unknown>) => Promise<void>;
   sync: () => Promise<void>;
+  loadPreviewAudio?: (questionId: string, signal: AbortSignal) => Promise<Blob>;
 }) {
   const question = data.questions[0], listening = data.listening;
   const player = useRef<HTMLAudioElement>(null);
@@ -22,6 +24,7 @@ export function ItpListening({ id, data, now, busy, online, act, sync }: {
   const [loading, setLoading] = useState(false);
   const [playback, setPlayback] = useState<"idle" | "ready" | "playing" | "done">("idle");
   const [audioError, setAudioError] = useState("");
+  const [audioProgress, setAudioProgress] = useState(0);
 
   useEffect(() => () => {
     request.current?.abort();
@@ -52,18 +55,23 @@ export function ItpListening({ id, data, now, busy, online, act, sync }: {
     }
   }
 
+  async function fetchAudio(signal: AbortSignal) {
+    if (loadPreviewAudio) return loadPreviewAudio(question.id, signal);
+    const response = await fetch(`/api/assessments/${id}/listening`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, signal,
+      body: JSON.stringify({ questionId: question.id }),
+    });
+    if (!response.ok) throw Error((await response.json()).error);
+    return response.blob();
+  }
+
   async function loadClip() {
     if (request.current || source.current) return;
     const controller = new AbortController();
     request.current = controller;
     setLoading(true); setAudioError("");
     try {
-      const response = await fetch(`/api/assessments/${id}/listening`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-        body: JSON.stringify({ questionId: question.id }),
-      });
-      if (!response.ok) throw Error((await response.json()).error);
-      const blob = await response.blob();
+      const blob = await fetchAudio(controller.signal);
       if (controller.signal.aborted || !player.current) return;
       source.current = URL.createObjectURL(blob);
       player.current.src = source.current;
@@ -80,28 +88,45 @@ export function ItpListening({ id, data, now, busy, online, act, sync }: {
   }
 
   const canAnswer = question.options.length > 0 && playback !== "ready" && playback !== "playing";
-  return <article className="workspace-card assessment-question">
-    <div className="question-heading"><span className="status-badge neutral">Soal {listening.position} dari {listening.total}</span><span>Part {listening.part} · {PARTS[listening.part]}</span></div>
-    <h2>Dengarkan soal Listening</h2>
-    <p>Audio diputar sekali. Selesaikan soal ini sebelum melanjutkan.</p>
-    <audio ref={player} preload="none" onEnded={() => { setPlayback("done"); void refreshQuestion(); }}
-      onError={() => { setPlayback("done"); setAudioError("Audio terputus. Beri tahu instruktur setelah sesi."); }} />
+  const canLoad = listening.audioUntil === null && playback === "idle";
+  const phase = canAnswer ? "Siap dijawab" : loading ? "Memuat audio" : playback === "playing" ? "Sedang diputar"
+    : canLoad || playback === "ready" ? "Siap diputar" : "Menunggu pilihan jawaban";
+  const choice = data.answers[question.id];
+  return <article className="assessment-surface assessment-question-panel assessment-listening-panel" aria-labelledby="assessment-listening-title">
+    <div className="assessment-question-tools">
+      <span className="assessment-pill">Soal {listening.position} dari {listening.total}</span>
+      <span className="assessment-listening-part">Part {listening.part} · {PARTS[listening.part]}</span>
+    </div>
+    <h2 className="assessment-prompt" id="assessment-listening-title">{canAnswer ? "Pilih jawaban Listening" : "Dengarkan klip Listening"}</h2>
+    <div className="assessment-audio-box assessment-listening-audio">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M3 14v-2a9 9 0 0 1 18 0v2M3 13h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Zm18 0h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-5Z"/>
+      </svg>
+      <div className="assessment-audio-information">
+        <strong role="status">{phase}</strong>
+        {playback === "playing" ? <progress aria-label="Progres pemutaran audio" value={audioProgress} max={100} />
+          : <p>{canAnswer ? "Jawab berdasarkan klip yang sudah diputar."
+            : "Klip diputar sekali. Pilihan jawaban muncul setelah audio selesai."}</p>}
+      </div>
+      {playback === "ready" ? <button type="button" className="assessment-control assessment-control-primary" onClick={() => void play()}>Mulai pemutaran</button>
+        : canLoad && <button type="button" className="assessment-control assessment-control-primary" disabled={loading || !online}
+          onClick={() => void loadClip()}>{loading ? "Memuat audio…" : "Putar audio"}</button>}
+    </div>
+    <audio ref={player} preload="none" onTimeUpdate={event => {
+      const { currentTime, duration } = event.currentTarget;
+      if (Number.isFinite(duration) && duration > 0) setAudioProgress(Math.min(100, currentTime / duration * 100));
+    }} onEnded={() => { setPlayback("done"); void refreshQuestion(); }}
+      onError={() => { setPlayback("done"); setAudioError("Audio terputus. Beri tahu pengelola setelah sesi."); }} />
     {audioError && <p className="error-banner" role="alert">{audioError}</p>}
-    {playback === "ready" ? <button type="button" className="button primary" onClick={() => void play()}>Mulai pemutaran</button>
-      : listening.audioUntil === null && playback === "idle" ? <button type="button" className="button primary" disabled={loading || !online} onClick={() => void loadClip()}>{loading ? "Memuat audio…" : "Putar audio"}</button>
-      : !canAnswer && <p role="status">Tunggu sampai audio selesai.</p>}
     {canAnswer && <>
-      <fieldset disabled={busy || !online}><legend>Pilih jawaban</legend>{question.options.map((option, i) =>
-        <label className={`assessment-option ${data.answers[question.id] === i ? "selected" : ""}`} key={i}>
-          <input type="radio" name={question.id} checked={data.answers[question.id] === i} onChange={() => void act({ action: "answer", questionId: question.id, choice: i })} />
-          <span className="option-letter" aria-hidden="true">{String.fromCharCode(65 + i)}</span><span>{option}</span>
-        </label>)}
-      </fieldset>
-      <button className="text-button" type="button" disabled={busy || !online || data.answers[question.id] === undefined}
-        onClick={() => void act({ action: "answer", questionId: question.id, choice: null })}>Kosongkan jawaban</button>
-      <button className="button primary" type="button" disabled={busy || !online} onClick={() => void act({ action: "listeningNext", questionId: question.id })}>
-        {listening.position === listening.total ? "Selesaikan Listening" : data.answers[question.id] === undefined ? "Lewati soal" : "Soal berikutnya"}
-      </button>
+      <AssessmentChoices question={question} choice={choice} disabled={busy || !online}
+        onAnswer={choice => void act({ action: "answer", questionId: question.id, choice })} />
+      <div className="assessment-listening-actions">
+        <button className="assessment-control assessment-control-primary" type="button" disabled={busy || !online}
+          onClick={() => void act({ action: "listeningNext", questionId: question.id })}>
+          {listening.position === listening.total ? "Selesaikan Listening" : choice === undefined ? "Lewati soal →" : "Soal berikutnya →"}
+        </button>
+      </div>
     </>}
   </article>;
 }
